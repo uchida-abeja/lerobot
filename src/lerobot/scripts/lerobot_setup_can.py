@@ -336,7 +336,7 @@ def run_speed(cfg: CANSetupConfig):
 
 @draccus.wrap()
 def setup_can(cfg: CANSetupConfig):
-    if not is_package_available("can"):
+    if not is_package_available("python-can"):
         print("Error: python-can not installed. Install with: pip install python-can")
         sys.exit(1)
 
