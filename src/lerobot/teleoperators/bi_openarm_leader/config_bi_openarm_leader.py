@@ -24,7 +24,15 @@ from ..config import TeleoperatorConfig
 @TeleoperatorConfig.register_subclass("bi_openarm_leader")
 @dataclass
 class BiOpenArmLeaderConfig(TeleoperatorConfig):
-    """Configuration class for Bi OpenArm Follower robots."""
+    """Configuration class for Bi OpenArm Leader robots."""
 
     left_arm_config: OpenArmLeaderConfigBase
     right_arm_config: OpenArmLeaderConfigBase
+
+    # Bimanual gravity compensation settings
+    # When enabled, both arms will apply gravity compensation independently
+    gravity_compensation: bool = False
+
+    # Gravity compensation gain (applied to both arms unless overridden in arm configs)
+    # Adjust to compensate for URDF parameter inaccuracies
+    gravity_compensation_gain: float = 0.7
