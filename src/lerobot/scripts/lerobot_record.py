@@ -110,6 +110,7 @@ from lerobot.robots import (  # noqa: F401
     so_follower,
     unitree_g1 as unitree_g1_robot,
 )
+from lerobot.robots.bi_openarm_follower import BiOpenArmFollower
 from lerobot.robots.openarm_follower import OpenArmFollower
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -125,6 +126,7 @@ from lerobot.teleoperators import (  # noqa: F401
     so_leader,
     unitree_g1,
 )
+from lerobot.teleoperators.bi_openarm_leader import BiOpenArmLeader
 from lerobot.teleoperators.openarm_leader import OpenArmLeader
 from lerobot.teleoperators.openarm_leader.force_observer import ForceObserver
 from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop
@@ -293,6 +295,8 @@ def record_loop(
     teleop_arm = teleop_keyboard = None
     force_observer = None
     last_feedback_time = None
+    force_observers: dict[str, ForceObserver] = {}
+    last_feedback_times: dict[str, float | None] = {}
     if isinstance(teleop, list):
         teleop_keyboard = next((t for t in teleop if isinstance(t, KeyboardTeleop)), None)
         teleop_arm = next(
@@ -317,13 +321,11 @@ def record_loop(
                 "For multi-teleop, the list must contain exactly one KeyboardTeleop and one arm teleoperator. Currently only supported for LeKiwi robot."
             )
 
-    force_feedback_enabled = (
+    if (
         isinstance(teleop, OpenArmLeader)
         and isinstance(robot, OpenArmFollower)
         and getattr(teleop.config, "force_feedback_enabled", False)
-    )
-
-    if force_feedback_enabled:
+    ):
         try:
             force_observer = ForceObserver(
                 urdf_path=teleop.config.urdf_path,
@@ -335,6 +337,26 @@ def record_loop(
         except Exception as exc:
             logging.warning(f"Force feedback disabled: failed to init observer ({exc})")
             force_observer = None
+    elif (
+        isinstance(teleop, BiOpenArmLeader)
+        and isinstance(robot, BiOpenArmFollower)
+        and getattr(teleop.config, "force_feedback_enabled", False)
+    ):
+        for side in ("left", "right"):
+            try:
+                force_observers[side] = ForceObserver(
+                    urdf_path=teleop.config.urdf_path,
+                    gravity_vector=teleop.config.gravity_vector,
+                    gravity_gain=teleop.config.gravity_compensation_gain,
+                    lpf_cutoff_hz=teleop.config.force_feedback_lpf_cutoff_hz,
+                    torque_limits=teleop.config.force_feedback_torque_limits,
+                )
+                last_feedback_times[side] = None
+            except Exception as exc:
+                logging.warning(
+                    "Force feedback disabled: failed to init observer for "
+                    f"{side} arm ({exc})"
+                )
 
     # Reset policy and processor if they are provided
     if policy is not None and preprocessor is not None and postprocessor is not None:
@@ -418,6 +440,29 @@ def record_loop(
             tau_ext = force_observer.estimate(obs, dt_s=dt_s)
             feedback = {f"joint_{i}.tau_ext": float(tau_ext[i - 1]) for i in range(1, 8)}
             teleop.send_feedback(feedback)
+        elif force_observers and isinstance(teleop, BiOpenArmLeader):
+            now = time.perf_counter()
+            feedback: dict[str, float] = {}
+            for side, observer in force_observers.items():
+                side_obs = {
+                    key.removeprefix(f"{side}_"): value
+                    for key, value in obs.items()
+                    if key.startswith(f"{side}_")
+                }
+                dt_s = None
+                if side in last_feedback_times and last_feedback_times[side] is not None:
+                    dt_s = now - last_feedback_times[side]
+                last_feedback_times[side] = now
+
+                tau_ext = observer.estimate(side_obs, dt_s=dt_s)
+                feedback.update(
+                    {
+                        f"{side}_joint_{i}.tau_ext": float(tau_ext[i - 1])
+                        for i in range(1, 8)
+                    }
+                )
+            if feedback:
+                teleop.send_feedback(feedback)
 
         # Write to dataset
         if dataset is not None:
