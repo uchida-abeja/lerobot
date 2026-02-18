@@ -110,6 +110,7 @@ from lerobot.robots import (  # noqa: F401
     so_follower,
     unitree_g1 as unitree_g1_robot,
 )
+from lerobot.robots.openarm_follower import OpenArmFollower
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
@@ -124,6 +125,8 @@ from lerobot.teleoperators import (  # noqa: F401
     so_leader,
     unitree_g1,
 )
+from lerobot.teleoperators.openarm_leader import OpenArmLeader
+from lerobot.teleoperators.openarm_leader.force_observer import ForceObserver
 from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop
 from lerobot.utils.constants import ACTION, OBS_STR
 from lerobot.utils.control_utils import (
@@ -288,6 +291,8 @@ def record_loop(
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
 
     teleop_arm = teleop_keyboard = None
+    force_observer = None
+    last_feedback_time = None
     if isinstance(teleop, list):
         teleop_keyboard = next((t for t in teleop if isinstance(t, KeyboardTeleop)), None)
         teleop_arm = next(
@@ -311,6 +316,25 @@ def record_loop(
             raise ValueError(
                 "For multi-teleop, the list must contain exactly one KeyboardTeleop and one arm teleoperator. Currently only supported for LeKiwi robot."
             )
+
+    force_feedback_enabled = (
+        isinstance(teleop, OpenArmLeader)
+        and isinstance(robot, OpenArmFollower)
+        and getattr(teleop.config, "force_feedback_enabled", False)
+    )
+
+    if force_feedback_enabled:
+        try:
+            force_observer = ForceObserver(
+                urdf_path=teleop.config.urdf_path,
+                gravity_vector=teleop.config.gravity_vector,
+                gravity_gain=teleop.config.gravity_compensation_gain,
+                lpf_cutoff_hz=teleop.config.force_feedback_lpf_cutoff_hz,
+                torque_limits=teleop.config.force_feedback_torque_limits,
+            )
+        except Exception as exc:
+            logging.warning(f"Force feedback disabled: failed to init observer ({exc})")
+            force_observer = None
 
     # Reset policy and processor if they are provided
     if policy is not None and preprocessor is not None and postprocessor is not None:
@@ -385,6 +409,15 @@ def record_loop(
         # so action actually sent is saved in the dataset. action = postprocessor.process(action)
         # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
         _sent_action = robot.send_action(robot_action_to_send)
+
+        if force_observer is not None and isinstance(teleop, OpenArmLeader):
+            now = time.perf_counter()
+            dt_s = None if last_feedback_time is None else now - last_feedback_time
+            last_feedback_time = now
+
+            tau_ext = force_observer.estimate(obs, dt_s=dt_s)
+            feedback = {f"joint_{i}.tau_ext": float(tau_ext[i - 1]) for i in range(1, 8)}
+            teleop.send_feedback(feedback)
 
         # Write to dataset
         if dataset is not None:

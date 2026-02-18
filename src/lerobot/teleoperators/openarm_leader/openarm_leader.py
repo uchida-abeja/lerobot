@@ -47,6 +47,7 @@ class OpenArmLeader(Teleoperator):
     def __init__(self, config: OpenArmLeaderConfig):
         super().__init__(config)
         self.config = config
+        self._last_states: dict[str, dict[str, float]] | None = None
 
         # Arm motors
         motors: dict[str, Motor] = {}
@@ -70,7 +71,7 @@ class OpenArmLeader(Teleoperator):
 
         # Initialize gravity compensation
         self.arm_ik = None
-        if self.config.gravity_compensation:
+        if self.config.gravity_compensation or self.config.force_feedback_enabled:
             from .openarm_kinematic_processor import OpenArmIK
 
             # Expand environment variables in URDF path and convert to Path
@@ -85,9 +86,9 @@ class OpenArmLeader(Teleoperator):
                 logger.info(
                     f"Gravity compensation enabled with gain={self.config.gravity_compensation_gain}"
                 )
-                if not self.config.manual_control:
+                if self.config.manual_control:
                     logger.warning(
-                        "Gravity compensation requires manual_control=False. "
+                        "Torque control requires manual_control=False for gravity compensation or force feedback. "
                         "Please set manual_control=False in config."
                     )
             except Exception as e:
@@ -107,8 +108,8 @@ class OpenArmLeader(Teleoperator):
 
     @property
     def feedback_features(self) -> dict[str, type]:
-        """Feedback features (not implemented for OpenArms)."""
-        return {}
+        """Feedback features for force feedback (external torque per joint)."""
+        return {f"joint_{i}.tau_ext": float for i in range(1, 8)}
 
     @property
     def is_connected(self) -> bool:
@@ -209,17 +210,26 @@ class OpenArmLeader(Teleoperator):
         - manual_control=True: Disable torque for manual movement
         - Otherwise: Enable MIT control with configured gains
         """
+        if self.config.manual_control:
+            if self.config.force_feedback_enabled:
+                logger.warning(
+                    "Force feedback requested while manual_control=True; torque will remain disabled."
+                )
+            logger.info("Configuring motors for manual control (torque disabled)")
+            return self.bus.disable_torque()
+
+        if self.config.force_feedback_enabled and self.arm_ik is not None:
+            logger.info("Configuring motors for force feedback mode (soft control)")
+            return self.bus.configure_motors()
+
         if self.config.gravity_compensation and self.arm_ik is not None:
             logger.info("Configuring motors for gravity compensation mode (soft control)")
             # When gravity compensation is enabled, we'll use soft MIT control
             # The actual gains will be applied in _apply_gravity_compensation()
             return self.bus.configure_motors()
-        elif self.config.manual_control:
-            logger.info("Configuring motors for manual control (torque disabled)")
-            return self.bus.disable_torque()
-        else:
-            logger.info("Configuring motors for MIT control")
-            return self.bus.configure_motors()
+
+        logger.info("Configuring motors for MIT control")
+        return self.bus.configure_motors()
 
     def setup_motors(self) -> None:
         raise NotImplementedError(
@@ -358,7 +368,81 @@ class OpenArmLeader(Teleoperator):
             logger.error(f"Failed to send gravity compensation commands: {e}")
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
-        raise NotImplementedError("Feedback is not yet implemented for OpenArm leader.")
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        if not self.config.force_feedback_enabled:
+            return
+
+        if self.config.manual_control:
+            logger.warning(
+                "Force feedback requires manual_control=False. "
+                "Feedback command skipped."
+            )
+            return
+
+        if self.arm_ik is None:
+            logger.warning("Force feedback disabled: OpenArmIK not available.")
+            return
+
+        states = self._last_states or self.bus.sync_read_all_states()
+
+        arm_positions = []
+        for i in range(1, 8):
+            motor_name = f"joint_{i}"
+            state = states.get(motor_name, {})
+            position_deg = state.get("position", 0.0)
+            arm_positions.append(np.deg2rad(position_deg))
+
+        if len(arm_positions) != 7:
+            logger.warning("Force feedback skipped: invalid joint position count.")
+            return
+
+        tau_ext = np.array(
+            [feedback.get(f"joint_{i}.tau_ext", 0.0) for i in range(1, 8)],
+            dtype=float,
+        )
+
+        if len(self.config.force_feedback_torque_limits) == 7:
+            tau_ext = np.clip(
+                tau_ext,
+                -np.array(self.config.force_feedback_torque_limits),
+                np.array(self.config.force_feedback_torque_limits),
+            )
+
+        gravity_torques_raw = self.arm_ik.solve_tau(np.array(arm_positions))
+        gravity_torques = gravity_torques_raw * self.config.gravity_compensation_gain
+
+        torque_cmd = gravity_torques + self.config.force_feedback_gain * tau_ext
+
+        if len(self.config.software_torque_limits) == 7:
+            torque_cmd = np.clip(
+                torque_cmd,
+                -np.array(self.config.software_torque_limits),
+                np.array(self.config.software_torque_limits),
+            )
+
+        commands = {}
+        for i in range(7):
+            motor_name = f"joint_{i+1}"
+            state = states.get(motor_name, {})
+            target_pos_deg = state.get("position", 0.0)
+
+            kp = self.config.force_feedback_position_kp[i]
+            kd = self.config.force_feedback_position_kd[i]
+
+            commands[motor_name] = (
+                kp,
+                kd,
+                target_pos_deg,
+                0.0,
+                torque_cmd[i],
+            )
+
+        try:
+            self.bus._mit_control_batch(commands)
+        except Exception as e:
+            logger.error(f"Failed to send force feedback commands: {e}")
 
     def disconnect(self) -> None:
         """Disconnect from teleoperator."""

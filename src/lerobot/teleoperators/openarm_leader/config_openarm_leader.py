@@ -118,6 +118,35 @@ class OpenArmLeaderConfigBase:
         default_factory=lambda: [2.0, 2.0, 2.0, 2.0, 0.2, 0.2, 0.2, 0.2]
     )
 
+    # === Force Feedback Settings ===
+
+    # Enable simple force feedback using external torque estimation on the follower.
+    # Requires manual_control=False.
+    force_feedback_enabled: bool = False
+
+    # Force feedback gain for external torque applied to the leader.
+    # Keep small to avoid oscillations.
+    force_feedback_gain: float = 0.1
+
+    # Low-pass filter cutoff for external torque estimation [Hz].
+    # Set to 0 to disable filtering.
+    force_feedback_lpf_cutoff_hz: float = 10.0
+
+    # Per-joint torque limits for the external torque term [Nm].
+    # Conservative defaults to keep the leader safe.
+    # [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6, joint_7]
+    force_feedback_torque_limits: list[float] = field(
+        default_factory=lambda: [1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5]
+    )
+
+    # MIT control gains for force feedback mode.
+    force_feedback_position_kp: list[float] = field(
+        default_factory=lambda: [50.0, 50.0, 50.0, 50.0, 10.0, 10.0, 10.0, 10.0]
+    )
+    force_feedback_position_kd: list[float] = field(
+        default_factory=lambda: [2.0, 2.0, 2.0, 2.0, 0.2, 0.2, 0.2, 0.2]
+    )
+
 
 @TeleoperatorConfig.register_subclass("openarm_leader")
 @dataclass

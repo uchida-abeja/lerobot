@@ -82,6 +82,7 @@ from lerobot.robots import (  # noqa: F401
     so_follower,
     unitree_g1 as unitree_g1_robot,
 )
+from lerobot.robots.openarm_follower import OpenArmFollower
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
@@ -98,6 +99,8 @@ from lerobot.teleoperators import (  # noqa: F401
     so_leader,
     unitree_g1,
 )
+from lerobot.teleoperators.openarm_leader import OpenArmLeader
+from lerobot.teleoperators.openarm_leader.force_observer import ForceObserver
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging, move_cursor_up
@@ -151,6 +154,27 @@ def teleop_loop(
     """
 
     display_len = max(len(key) for key in robot.action_features)
+    force_observer = None
+    last_feedback_time = None
+
+    force_feedback_enabled = (
+        isinstance(teleop, OpenArmLeader)
+        and isinstance(robot, OpenArmFollower)
+        and getattr(teleop.config, "force_feedback_enabled", False)
+    )
+
+    if force_feedback_enabled:
+        try:
+            force_observer = ForceObserver(
+                urdf_path=teleop.config.urdf_path,
+                gravity_vector=teleop.config.gravity_vector,
+                gravity_gain=teleop.config.gravity_compensation_gain,
+                lpf_cutoff_hz=teleop.config.force_feedback_lpf_cutoff_hz,
+                torque_limits=teleop.config.force_feedback_torque_limits,
+            )
+        except Exception as exc:
+            logging.warning(f"Force feedback disabled: failed to init observer ({exc})")
+            force_observer = None
     start = time.perf_counter()
 
     while True:
@@ -173,6 +197,15 @@ def teleop_loop(
 
         # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
         _ = robot.send_action(robot_action_to_send)
+
+        if force_observer is not None:
+            now = time.perf_counter()
+            dt_s = None if last_feedback_time is None else now - last_feedback_time
+            last_feedback_time = now
+
+            tau_ext = force_observer.estimate(obs, dt_s=dt_s)
+            feedback = {f"joint_{i}.tau_ext": float(tau_ext[i - 1]) for i in range(1, 8)}
+            teleop.send_feedback(feedback)
 
         if display_data:
             # Process robot observation through pipeline
