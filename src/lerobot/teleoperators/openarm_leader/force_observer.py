@@ -16,6 +16,7 @@
 
 import logging
 import math
+import os
 from typing import Iterable
 
 import numpy as np
@@ -42,8 +43,9 @@ class ForceObserver:
         torque_limits: Iterable[float],
         num_arm_joints: int = 7,
     ) -> None:
+        expanded_urdf_path = os.path.expandvars(urdf_path)
         self.arm_ik = OpenArmIK(
-            urdf_path=urdf_path,
+            urdf_path=expanded_urdf_path,
             gravity_vector=np.array(list(gravity_vector), dtype=float),
             num_arm_joints=num_arm_joints,
         )
