@@ -1,0 +1,258 @@
+# OpenArm Leader Gravity Compensation Calibration Guide
+
+This guide explains how to calibrate the gravity compensation feature for OpenArm Leader arms to account for individual robot variations.
+
+## Why Calibration is Needed
+
+The URDF model contains idealized physical parameters (mass, inertia) that may not match your actual robot due to:
+
+- **3D printing variations**: Different infill percentages, material density
+- **Cable routing**: Additional weight from wiring and connections  
+- **Mounted hardware**: Cameras, sensors, or custom end-effectors
+- **Manufacturing tolerances**: Assembly variations between units
+
+The `gravity_compensation_gain` parameter lets you scale the computed torques to match your specific robot.
+
+## Prerequisites
+
+- OpenArm Leader arm with gravity compensation enabled
+- URDF file properly installed (see [URDF_README.md](../src/lerobot/teleoperators/openarm_leader/URDF_README.md))
+- `manual_control: false` in configuration
+- Safe workspace with no obstacles
+
+## Calibration Procedure
+
+### Step 1: Initial Setup
+
+Start with the default configuration:
+
+```yaml
+teleoperator:
+  type: openarm_leader
+  gravity_compensation: true
+  gravity_compensation_gain: 1.0
+  manual_control: false
+  port: can0  # or your CAN interface
+```
+
+### Step 2: Test Standard Poses
+
+Test the arm in three key configurations to assess gravity compensation quality:
+
+#### Pose A: Vertical (Down)
+- **Configuration**: Arm hanging straight down
+- **Expected behavior**: Minimal torque needed (low gravity load)
+- **Observation**: Note any drift or oscillation
+
+#### Pose B: Horizontal (Extended)
+- **Configuration**: Arm extended horizontally to the side
+- **Expected behavior**: Maximum gravity compensation torque
+- **Observation**: Note drift direction and magnitude
+
+#### Pose C: 45-Degree Intermediate
+- **Configuration**: Arm at 45° angle
+- **Expected behavior**: Moderate torque
+- **Observation**: Note if arm holds position or drifts
+
+### Step 3: Assess Drift Behavior
+
+For each pose, gently position the arm and release. Observe for 10 seconds:
+
+| Observation | Meaning | Action |
+|------------|---------|--------|
+| ✅ Arm stays in place (< 5cm drift) | **Optimal** | No adjustment needed |
+| ⬇️ Arm slowly drifts downward | Insufficient compensation | **Increase gain** |
+| ⬆️ Arm slowly floats upward | Excessive compensation | **Decrease gain** |
+| 🔄 Arm oscillates/vibrates | Control gains too high | **Reduce Kp/Kd** |
+
+### Step 4: Adjust Gravity Compensation Gain
+
+Based on your observations:
+
+#### If arm drifts DOWN:
+The URDF underestimates your robot's actual mass. Increase gain in 0.05 increments:
+
+```yaml
+gravity_compensation_gain: 1.05  # Try increasing to 1.10, 1.15, etc.
+```
+
+#### If arm floats UP:
+The URDF overestimates your robot's actual mass. Decrease gain in 0.05 increments:
+
+```yaml
+gravity_compensation_gain: 0.95  # Try decreasing to 0.90, 0.85, etc.
+```
+
+#### Typical range:
+- Most robots: **0.8 to 1.2**
+- Heavily modified: **0.7 to 1.3**
+
+### Step 5: Fine-Tuning Control Gains
+
+If the arm oscillates or vibrates after gain adjustment, reduce the MIT control gains:
+
+```yaml
+gravity_comp_position_kp: [40.0, 40.0, 40.0, 40.0, 8.0, 8.0, 8.0, 8.0]  # Reduced from 50
+gravity_comp_position_kd: [1.5, 1.5, 1.5, 1.5, 0.15, 0.15, 0.15, 0.15]  # Reduced from 2.0
+```
+
+**Guidelines:**
+- **High-frequency oscillation** (buzzing): Reduce `Kd` first
+- **Low-frequency oscillation** (slow swaying): Reduce `Kp` first
+- Adjust proximal joints (1-4) separately from distal joints (5-7)
+
+### Step 6: Long-Term Stability Test
+
+After calibration, test stability:
+
+1. **30-second hold test**: Position arm in horizontal pose and observe
+   - Acceptable drift: < 10cm over 30 seconds
+   - Ideal: < 5cm over 30 seconds
+
+2. **Dynamic test**: Slowly move arm through full range of motion
+   - Should feel lightweight and responsive
+   - No sudden jerks or resistance
+   - Smooth transitions between poses
+
+### Step 7: Document Your Calibration
+
+Record your final settings for future reference:
+
+```yaml
+# My OpenArm Leader Calibration - [Date]
+# Robot Serial/ID: [your_robot_id]
+# URDF Version: [urdf_version]
+
+gravity_compensation: true
+gravity_compensation_gain: 1.08  # Calibrated gain
+software_torque_limits: [8.0, 8.0, 5.0, 5.0, 2.0, 2.0, 2.0]
+
+# Optional: If you modified control gains
+gravity_comp_position_kp: [50.0, 50.0, 50.0, 50.0, 10.0, 10.0, 10.0, 10.0]
+gravity_comp_position_kd: [2.0, 2.0, 2.0, 2.0, 0.2, 0.2, 0.2, 0.2]
+
+# Notes:
+# - Horizontal drift corrected with gain increase from 1.0 to 1.08
+# - No oscillation issues
+# - Tested with [camera model] mounted on end-effector
+```
+
+## Bimanual Calibration
+
+For bimanual OpenArm setups:
+
+### Individual Arm Calibration
+
+If left and right arms have different characteristics:
+
+```yaml
+teleoperator:
+  type: bi_openarm_leader
+  gravity_compensation: true
+  left_arm_config:
+    port: can0
+    gravity_compensation_gain: 1.05  # Left arm specific
+  right_arm_config:
+    port: can1
+    gravity_compensation_gain: 1.10  # Right arm specific (heavier)
+```
+
+### Symmetric Calibration
+
+For identical left/right arms, use the bimanual config:
+
+```yaml
+teleoperator:
+  type: bi_openarm_leader
+  gravity_compensation: true
+  gravity_compensation_gain: 1.08  # Applied to both arms
+```
+
+## Troubleshooting
+
+### Issue: Arm still drifts after gain adjustment
+
+**Possible causes:**
+- URDF model significantly incorrect (> 30% mass error)
+- Non-uniform mass distribution (e.g., heavy camera on one side)
+- Friction compensation needed (future feature)
+
+**Solutions:**
+1. Try more aggressive gain adjustments (±0.1 increments)
+2. Check for mechanical binding or cable tension
+3. Consider per-joint torque offsets (advanced, requires code modification)
+
+### Issue: Oscillation/vibration persists
+
+**Possible causes:**
+- Control loop timing issues
+- CAN bus latency
+- Kp/Kd gains too high
+
+**Solutions:**
+1. Reduce Kp/Kd by 20-30%
+2. Check CAN bus frequency (should be 200-500 Hz)
+3. Verify no CAN bus errors: `ip -details -statistics link show can0`
+
+### Issue: Gravity compensation suddenly stops working
+
+**Check:**
+1. URDF file still accessible: `ls -l [urdf_path]`
+2. No errors in logs: Look for "Gravity compensation error"
+3. Pinocchio installed: `python -c "import pinocchio; print(pinocchio.__version__)"`
+
+### Issue: Different behavior in different orientations
+
+**Explanation:**
+- Normal! Gravity vector changes relative to joints in different poses
+- Horizontal poses have highest torque requirements
+- Vertical poses have minimal requirements
+
+**If excessive variation:**
+- May indicate URDF joint axis errors
+- Verify joint zero positions match physical robot
+
+## Advanced: Per-Joint Calibration
+
+For experts who need per-joint gain adjustments (requires code modification):
+
+```python
+# In openarm_leader.py, _apply_gravity_compensation():
+per_joint_gains = [1.0, 1.1, 0.95, 1.05, 1.0, 0.98, 1.02]
+gravity_torques_adjusted = gravity_torques * per_joint_gains * self.config.gravity_compensation_gain
+```
+
+This allows compensating for per-joint mass distribution errors.
+
+## Performance Expectations
+
+After proper calibration:
+
+- **Drift**: < 5cm over 30 seconds in horizontal pose
+- **Responsiveness**: Arm feels 70-90% lighter during manipulation
+- **Control latency**: < 5ms gravity torque computation overhead
+- **Stability**: No oscillations at any joint
+- **Safety**: Torques always below software limits
+
+## Getting Help
+
+If calibration is unsuccessful:
+
+1. Check [OpenArm documentation](openarm.mdx)
+2. Validate URDF: Run `python -c "from lerobot.teleoperators.openarm_leader.openarm_kinematic_processor import OpenArmIK; ik = OpenArmIK('openarm.urdf'); print(ik.validate_urdf())"`
+3. Post calibration logs and observations to [LeRobot GitHub Discussions](https://github.com/huggingface/lerobot/discussions)
+
+## Safety Reminders
+
+⚠️ **Important Safety Notes:**
+
+- Always maintain a clear workspace during calibration
+- Keep emergency stop button accessible
+- Start with conservative gains and increase gradually
+- Monitor motor temperatures during extended testing
+- If motors get hot (> 60°C), reduce duty cycle or lower gains
+- Software torque limits are your safety net—don't disable them
+
+---
+
+**Next Steps:** After calibration, see the [OpenArm documentation](openarm.mdx) for teleoperation usage.

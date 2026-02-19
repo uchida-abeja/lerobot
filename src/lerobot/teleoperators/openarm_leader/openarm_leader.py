@@ -15,8 +15,12 @@
 # limitations under the License.
 
 import logging
+import os
+from pathlib import Path
 import time
 from typing import Any
+
+import numpy as np
 
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
 from lerobot.motors.damiao import DamiaoMotorsBus
@@ -63,6 +67,33 @@ class OpenArmLeader(Teleoperator):
             bitrate=self.config.can_bitrate,
             data_bitrate=self.config.can_data_bitrate if self.config.use_can_fd else None,
         )
+
+        # Initialize gravity compensation
+        self.arm_ik = None
+        if self.config.gravity_compensation:
+            from .openarm_kinematic_processor import OpenArmIK
+
+            # Expand environment variables in URDF path and convert to Path
+            urdf_path = Path(os.path.expandvars(self.config.urdf_path))
+
+            try:
+                self.arm_ik = OpenArmIK(
+                    urdf_path=urdf_path,
+                    gravity_vector=np.array(self.config.gravity_vector),
+                    num_arm_joints=7,
+                )
+                logger.info(
+                    f"Gravity compensation enabled with gain={self.config.gravity_compensation_gain}"
+                )
+                if not self.config.manual_control:
+                    logger.warning(
+                        "Gravity compensation requires manual_control=False. "
+                        "Please set manual_control=False in config."
+                    )
+            except Exception as e:
+                logger.error(f"Failed to initialize gravity compensation: {e}")
+                logger.error("Continuing without gravity compensation.")
+                self.arm_ik = None
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -171,12 +202,24 @@ class OpenArmLeader(Teleoperator):
 
     def configure(self) -> None:
         """
-        Configure motors for manual teleoperation.
+        Configure motors for teleoperation.
 
-        For manual control, we disable torque so the arm can be moved by hand.
+        Behavior:
+        - gravity_compensation=True: Enable MIT control with soft gains for gravity compensation
+        - manual_control=True: Disable torque for manual movement
+        - Otherwise: Enable MIT control with configured gains
         """
-
-        return self.bus.disable_torque() if self.config.manual_control else self.bus.configure_motors()
+        if self.config.gravity_compensation and self.arm_ik is not None:
+            logger.info("Configuring motors for gravity compensation mode (soft control)")
+            # When gravity compensation is enabled, we'll use soft MIT control
+            # The actual gains will be applied in _apply_gravity_compensation()
+            return self.bus.configure_motors()
+        elif self.config.manual_control:
+            logger.info("Configuring motors for manual control (torque disabled)")
+            return self.bus.disable_torque()
+        else:
+            logger.info("Configuring motors for MIT control")
+            return self.bus.configure_motors()
 
     def setup_motors(self) -> None:
         raise NotImplementedError(
@@ -190,6 +233,9 @@ class OpenArmLeader(Teleoperator):
         This is the main method for teleoperators - it reads the current state
         of the leader arm and returns it as an action that can be sent to a follower.
 
+        When gravity compensation is enabled, this method also computes and applies
+        gravity compensation torques to reduce the perceived weight of the arm.
+
         Reads all motor states (pos/vel/torque) in one CAN refresh cycle.
         """
         start = time.perf_counter()
@@ -200,16 +246,116 @@ class OpenArmLeader(Teleoperator):
 
         # Use sync_read_all_states to get pos/vel/torque in one go
         states = self.bus.sync_read_all_states()
-        for motor in self.bus.motors:
-            state = states.get(motor, {})
-            action_dict[f"{motor}.pos"] = state.get("position")
-            action_dict[f"{motor}.vel"] = state.get("velocity")
-            action_dict[f"{motor}.torque"] = state.get("torque")
+
+        # Extract arm joint positions for gravity compensation (exclude gripper)
+        arm_positions = []
+        for i in range(1, 8):  # joint_1 through joint_7
+            motor_name = f"joint_{i}"
+            state = states.get(motor_name, {})
+            position_deg = state.get("position")
+            action_dict[f"{motor_name}.pos"] = position_deg
+            action_dict[f"{motor_name}.vel"] = state.get("velocity")
+            action_dict[f"{motor_name}.torque"] = state.get("torque")
+
+            # Convert to radians for gravity compensation computation
+            if position_deg is not None:
+                arm_positions.append(np.deg2rad(position_deg))
+
+        # Add gripper state
+        gripper_state = states.get("gripper", {})
+        action_dict["gripper.pos"] = gripper_state.get("position")
+        action_dict["gripper.vel"] = gripper_state.get("velocity")
+        action_dict["gripper.torque"] = gripper_state.get("torque")
+
+        # Apply gravity compensation if enabled
+        if self.config.gravity_compensation and self.arm_ik is not None:
+            if len(arm_positions) == 7:
+                try:
+                    q = np.array(arm_positions)
+
+                    # Compute gravity compensation torques using RNEA
+                    gravity_torques_raw = self.arm_ik.solve_tau(q)
+                    logger.debug(f"Raw gravity torques [Nm]: {gravity_torques_raw}")
+
+                    # Apply gain adjustment for individual robot calibration
+                    gravity_torques = gravity_torques_raw * self.config.gravity_compensation_gain
+                    logger.debug(
+                        f"After gain ({self.config.gravity_compensation_gain}): {gravity_torques}"
+                    )
+
+                    # Apply software torque limits (safety)
+                    torques_limited = []
+                    for i in range(7):
+                        limit = self.config.software_torque_limits[i]
+                        original = gravity_torques[i]
+                        gravity_torques[i] = np.clip(gravity_torques[i], -limit, limit)
+                        if abs(original) > limit:
+                            torques_limited.append((i + 1, original, gravity_torques[i]))
+                    
+                    if torques_limited:
+                        logger.warning(
+                            f"Torque limits applied: "
+                            + ", ".join([f"joint_{j}: {o:.3f} -> {c:.3f} Nm" 
+                                        for j, o, c in torques_limited])
+                        )
+                    
+                    logger.debug(f"Final torques [Nm]: {gravity_torques}")
+
+                    # Send gravity compensation torques via MIT control
+                    self._apply_gravity_compensation(gravity_torques, states)
+
+                except Exception as e:
+                    logger.error(f"Gravity compensation error: {e}", exc_info=True)
+            else:
+                logger.warning(
+                    f"Expected 7 arm joint positions, got {len(arm_positions)}. "
+                    "Skipping gravity compensation."
+                )
 
         dt_ms = (time.perf_counter() - start) * 1e3
-        logger.debug(f"{self} read state: {dt_ms:.1f}ms")
+        logger.debug(f"{self} read state + gravity comp: {dt_ms:.1f}ms")
 
         return action_dict
+
+    def _apply_gravity_compensation(
+        self, gravity_torques: np.ndarray, current_states: dict
+    ) -> None:
+        """
+        Apply gravity compensation torques to the arm motors.
+
+        Uses MIT control with soft gains to apply torques while maintaining the current
+        position. This reduces the perceived weight of the arm during teleoperation.
+
+        Args:
+            gravity_torques: Computed gravity torques [Nm] for 7 arm joints
+            current_states: Current motor states (position, velocity, torque)
+        """
+        commands = {}
+
+        for i in range(7):
+            motor_name = f"joint_{i+1}"
+            state = current_states.get(motor_name, {})
+
+            # Target position is current position (hold in place with gravity compensation)
+            target_pos_deg = state.get("position", 0.0)
+
+            # Use soft control gains to avoid oscillations
+            kp = self.config.gravity_comp_position_kp[i]
+            kd = self.config.gravity_comp_position_kd[i]
+
+            commands[motor_name] = (
+                kp,
+                kd,
+                target_pos_deg,
+                0.0,  # target velocity = 0
+                gravity_torques[i],  # feedforward torque
+            )
+
+        # Send commands via batch MIT control (efficient CAN bus usage)
+        try:
+            self.bus._mit_control_batch(commands)
+        except Exception as e:
+            logger.error(f"Failed to send gravity compensation commands: {e}")
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
         raise NotImplementedError("Feedback is not yet implemented for OpenArm leader.")
@@ -220,6 +366,7 @@ class OpenArmLeader(Teleoperator):
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         # Disconnect CAN bus
-        # For manual control, ensure torque is disabled before disconnecting
-        self.bus.disconnect(disable_torque=self.config.manual_control)
+        # For manual control or gravity compensation, ensure torque is disabled before disconnecting
+        disable_torque = self.config.manual_control or self.config.gravity_compensation
+        self.bus.disconnect(disable_torque=disable_torque)
         logger.info(f"{self} disconnected.")

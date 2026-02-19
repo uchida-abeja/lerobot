@@ -68,6 +68,56 @@ class OpenArmLeaderConfigBase:
     )
     position_kd: list[float] = field(default_factory=lambda: [3.0, 3.0, 3.0, 3.0, 0.2, 0.2, 0.2, 0.2])
 
+    # === Gravity Compensation Settings ===
+
+    # Enable gravity compensation (requires manual_control=False and valid URDF)
+    # When enabled, the leader arm will apply torques to counteract gravity,
+    # reducing the perceived weight during teleoperation
+    gravity_compensation: bool = False
+
+    # Path to OpenArm URDF file (supports environment variable expansion)
+    # The URDF must be obtained from: https://github.com/enactic/openarm
+    # See URDF_README.md for setup instructions
+    urdf_path: str = "${LEROBOT_ROOT}/src/lerobot/teleoperators/openarm_leader/openarm.urdf"
+
+    # Gravity compensation gain (scaling factor for computed torques)
+    # Adjust this to compensate for URDF parameter inaccuracies
+    # - If arm drifts down: increase gain (e.g., 1.05, 1.10)
+    # - If arm floats up: decrease gain (e.g., 0.95, 0.90)
+    # Typical range: 0.7 to 1.3
+    gravity_compensation_gain: float = 0.7
+
+    # Gravity vector in base frame [x, y, z] in m/s²
+    # Default: [0, 0, -9.81] for standard mounting (gravity pointing down)
+    # Modify for wall-mounted or tilted installations
+    gravity_vector: list[float] = field(default_factory=lambda: [0.0, 0.0, -9.81])
+
+    # Software torque limits for gravity compensation [Nm]
+    # Applied per joint to prevent excessive torques from URDF errors or sensor noise
+    # Values are set below hardware limits for safety margin (~80% of motor rating)
+    # [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6, joint_7]
+    software_torque_limits: list[float] = field(
+        default_factory=lambda: [
+            8.0,  # joint_1 (DM8009, rated 10Nm)
+            8.0,  # joint_2 (DM8009, rated 10Nm)
+            5.0,  # joint_3 (DM4340, rated 6Nm)
+            5.0,  # joint_4 (DM4340, rated 6Nm)
+            2.0,  # joint_5 (DM4310, rated 2.5Nm)
+            2.0,  # joint_6 (DM4310, rated 2.5Nm)
+            2.0,  # joint_7 (DM4310, rated 2.5Nm)
+        ]
+    )
+
+    # MIT control gains for gravity compensation mode (softer than normal control)
+    # Lower Kp/Kd values reduce oscillations and improve compliance during teleoperation
+    # List of 8 values: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6, joint_7, gripper]
+    gravity_comp_position_kp: list[float] = field(
+        default_factory=lambda: [50.0, 50.0, 50.0, 50.0, 10.0, 10.0, 10.0, 10.0]
+    )
+    gravity_comp_position_kd: list[float] = field(
+        default_factory=lambda: [2.0, 2.0, 2.0, 2.0, 0.2, 0.2, 0.2, 0.2]
+    )
+
 
 @TeleoperatorConfig.register_subclass("openarm_leader")
 @dataclass

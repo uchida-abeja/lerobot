@@ -235,6 +235,153 @@ lerobot-record \
 | `can_bitrate`      | `1000000` | Nominal bitrate (1 Mbps)            |
 | `can_data_bitrate` | `5000000` | CAN FD data bitrate (5 Mbps)        |
 
+## Gravity Compensation
+
+OpenArm Leader supports gravity compensation to reduce the perceived weight of the arm during teleoperation. This feature uses inverse dynamics (RNEA) to compute and apply torques that counteract gravity, making the arm feel significantly lighter and easier to manipulate.
+
+### Requirements
+
+- **URDF Model**: A robot description file containing mass and inertia properties
+- **Pinocchio**: Robotics library for dynamics computation (`pip install pin`)
+- **Linux**: Required for CAN bus support
+
+### Setup
+
+1. **Obtain the URDF model** from the [official OpenArm repository](https://github.com/enactic/openarm):
+   ```bash
+   # Download and place in the appropriate directory
+   # See src/lerobot/teleoperators/openarm_leader/URDF_README.md for details
+   ```
+
+2. **Enable gravity compensation** in your configuration:
+   ```yaml
+   teleoperator:
+     type: openarm_leader
+     port: can1
+     manual_control: false  # Must be false for gravity compensation
+     gravity_compensation: true
+     gravity_compensation_gain: 1.0  # Start with 1.0, adjust during calibration
+     urdf_path: "${LEROBOT_ROOT}/src/lerobot/teleoperators/openarm_leader/openarm.urdf"
+   ```
+
+3. **Calibrate the gain** to match your specific robot:
+   - See the [Gravity Compensation Calibration Guide](./openarm_gravity_calibration) for detailed instructions
+
+### Usage Example
+
+<hfoptions id="gravity-comp">
+<hfoption id="Command">
+
+```bash
+lerobot-teleoperate \
+    --robot.type=openarm_follower \
+    --robot.port=can0 \
+    --teleop.type=openarm_leader \
+    --teleop.port=can1 \
+    --teleop.manual_control=false \
+    --teleop.gravity_compensation=true \
+    --teleop.gravity_compensation_gain=1.0
+```
+
+</hfoption>
+<hfoption id="API example">
+
+```python
+from lerobot.teleoperators.openarm_leader import OpenArmLeader, OpenArmLeaderConfig
+
+config = OpenArmLeaderConfig(
+    port="can1",
+    id="my_openarm_leader",
+    manual_control=False,  # Required for gravity compensation
+    gravity_compensation=True,
+    gravity_compensation_gain=1.0,  # Adjust based on calibration
+    urdf_path="${LEROBOT_ROOT}/src/lerobot/teleoperators/openarm_leader/openarm.urdf",
+)
+
+leader = OpenArmLeader(config)
+leader.connect()
+
+# The arm now applies gravity compensation torques automatically
+# during get_action() calls, making it feel lighter
+action = leader.get_action()
+
+leader.disconnect()
+```
+
+</hfoption>
+</hfoptions>
+
+### Bimanual Gravity Compensation
+
+For bimanual setups, enable gravity compensation for both arms:
+
+```bash
+lerobot-teleoperate \
+    --robot.type=bi_openarm_follower \
+    --robot.left_arm_config.port=can0 \
+    --robot.right_arm_config.port=can1 \
+    --teleop.type=bi_openarm_leader \
+    --teleop.left_arm_config.port=can2 \
+    --teleop.left_arm_config.manual_control=false \
+    --teleop.right_arm_config.port=can3 \
+    --teleop.right_arm_config.manual_control=false \
+    --teleop.gravity_compensation=true \
+    --teleop.gravity_compensation_gain=1.0
+```
+
+### Configuration Parameters
+
+| Parameter                       | Default                                     | Description                                                                 |
+| ------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------- |
+| `gravity_compensation`          | `False`                                     | Enable gravity compensation                                                 |
+| `gravity_compensation_gain`     | `1.0`                                       | Scaling factor for torques (0.7-1.3 typical range)                         |
+| `urdf_path`                     | `${LEROBOT_ROOT}/.../openarm.urdf`          | Path to URDF model file                                                     |
+| `gravity_vector`                | `[0.0, 0.0, -9.81]`                         | Gravity vector in base frame (m/s²)                                         |
+| `software_torque_limits`        | `[8.0, 8.0, 5.0, 5.0, 2.0, 2.0, 2.0]`       | Per-joint torque limits (Nm) for safety                                     |
+| `gravity_comp_position_kp`      | `[50.0, 50.0, 50.0, 50.0, 10.0, ...]`       | Soft MIT control gains for gravity compensation mode                        |
+| `gravity_comp_position_kd`      | `[2.0, 2.0, 2.0, 2.0, 0.2, ...]`            | Soft MIT control damping for gravity compensation mode                      |
+
+### Important Notes
+
+⚠️ **URDF Accuracy**: The URDF model contains idealized physical parameters that may not match your robot due to:
+   - 3D printing variations (infill, material density)
+   - Cable routing and wiring weight
+   - Mounted sensors or cameras
+   - Manufacturing tolerances
+
+Use `gravity_compensation_gain` to compensate for these differences. See the [calibration guide](./openarm_gravity_calibration) for step-by-step instructions.
+
+⚠️ **Performance**: Gravity compensation adds 1-3ms of computation per control cycle. This is acceptable for typical 200-500 Hz control rates.
+
+⚠️ **Safety**: Software torque limits prevent excessive torques from URDF errors or sensor noise. Do not disable these limits.
+
+### Expected Results
+
+After proper calibration:
+- **Reduced perceived weight**: Arm feels 70-90% lighter
+- **Stable holding**: < 5cm drift over 30 seconds in horizontal pose  
+- **No oscillations**: Smooth, stable control at all joints
+- **Responsive**: Natural teleoperation feel without lag
+
+### Troubleshooting
+
+**Arm drifts downward:**
+- Increase `gravity_compensation_gain` in 0.05 increments (e.g., 1.0 → 1.05 → 1.10)
+
+**Arm floats upward:**
+- Decrease `gravity_compensation_gain` in 0.05 increments (e.g., 1.0 → 0.95 → 0.90)
+
+**Arm oscillates/vibrates:**
+- Reduce `gravity_comp_position_kp` and `gravity_comp_position_kd` by 20-30%
+
+**Gravity compensation not working:**
+- Verify URDF exists: `ls -l $LEROBOT_ROOT/src/lerobot/teleoperators/openarm_leader/openarm.urdf`
+- Check Pinocchio installation: `python -c "import pinocchio; print(pinocchio.__version__)"`
+- Ensure `manual_control=false` in configuration
+- Check logs for errors: Look for "Gravity compensation error" messages
+
+For detailed troubleshooting, see the [calibration guide](./openarm_gravity_calibration).
+
 ## Motor Configuration
 
 OpenArm uses Damiao motors with the following default configuration:

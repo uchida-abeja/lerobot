@@ -51,6 +51,9 @@ class BiOpenArmLeader(Teleoperator):
             manual_control=config.left_arm_config.manual_control,
             position_kd=config.left_arm_config.position_kd,
             position_kp=config.left_arm_config.position_kp,
+            # Propagate gravity compensation settings from bimanual config
+            gravity_compensation=config.gravity_compensation,
+            gravity_compensation_gain=config.gravity_compensation_gain,
         )
 
         right_arm_config = OpenArmLeaderConfig(
@@ -65,6 +68,9 @@ class BiOpenArmLeader(Teleoperator):
             manual_control=config.right_arm_config.manual_control,
             position_kd=config.right_arm_config.position_kd,
             position_kp=config.right_arm_config.position_kp,
+            # Propagate gravity compensation settings from bimanual config
+            gravity_compensation=config.gravity_compensation,
+            gravity_compensation_gain=config.gravity_compensation_gain,
         )
 
         self.left_arm = OpenArmLeader(left_arm_config)
