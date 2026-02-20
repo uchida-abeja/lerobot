@@ -49,6 +49,11 @@ class OpenArmLeader(Teleoperator):
         self.config = config
         self._last_states: dict[str, dict[str, float]] | None = None
 
+        # Performance monitoring
+        self._cycle_count = 0
+        self._cycle_times: list[float] = []
+        self._max_cycle_times = 100  # Keep rolling average of last 100 cycles
+
         # Arm motors
         motors: dict[str, Motor] = {}
         for motor_name, (send_id, recv_id, motor_type_str) in config.motor_config.items():
@@ -285,13 +290,15 @@ class OpenArmLeader(Teleoperator):
 
                     # Compute gravity compensation torques using RNEA
                     gravity_torques_raw = self.arm_ik.solve_tau(q)
-                    logger.debug(f"Raw gravity torques [Nm]: {gravity_torques_raw}")
+                    if self.config.enable_debug_logging:
+                        logger.debug(f"Raw gravity torques [Nm]: {gravity_torques_raw}")
 
                     # Apply gain adjustment for individual robot calibration
                     gravity_torques = gravity_torques_raw * self.config.gravity_compensation_gain
-                    logger.debug(
-                        f"After gain ({self.config.gravity_compensation_gain}): {gravity_torques}"
-                    )
+                    if self.config.enable_debug_logging:
+                        logger.debug(
+                            f"After gain ({self.config.gravity_compensation_gain}): {gravity_torques}"
+                        )
 
                     # Apply software torque limits (safety)
                     torques_limited = []
@@ -309,7 +316,8 @@ class OpenArmLeader(Teleoperator):
                                         for j, o, c in torques_limited])
                         )
                     
-                    logger.debug(f"Final torques [Nm]: {gravity_torques}")
+                    if self.config.enable_debug_logging:
+                        logger.debug(f"Final torques [Nm]: {gravity_torques}")
 
                     # Send gravity compensation torques via MIT control
                     self._apply_gravity_compensation(gravity_torques, states)
@@ -322,8 +330,25 @@ class OpenArmLeader(Teleoperator):
                     "Skipping gravity compensation."
                 )
 
+        # Performance monitoring
         dt_ms = (time.perf_counter() - start) * 1e3
-        logger.debug(f"{self} read state + gravity comp: {dt_ms:.1f}ms")
+        self._cycle_times.append(dt_ms)
+        if len(self._cycle_times) > self._max_cycle_times:
+            self._cycle_times.pop(0)
+        self._cycle_count += 1
+        
+        # Log performance metrics periodically (if enabled)
+        if (
+            self.config.enable_debug_logging
+            and self.config.performance_log_interval > 0
+            and self._cycle_count % self.config.performance_log_interval == 0
+        ):
+            avg_time = sum(self._cycle_times) / len(self._cycle_times)
+            max_time = max(self._cycle_times)
+            freq = 1000.0 / avg_time if avg_time > 0 else 0
+            logger.debug(
+                f"{self} | Loop time: avg={avg_time:.2f}ms, max={max_time:.2f}ms ({freq:.0f} Hz)"
+            )
 
         return action_dict
 

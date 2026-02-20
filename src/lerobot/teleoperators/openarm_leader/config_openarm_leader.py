@@ -147,6 +147,18 @@ class OpenArmLeaderConfigBase:
         default_factory=lambda: [2.0, 2.0, 2.0, 2.0, 0.2, 0.2, 0.2, 0.2]
     )
 
+    # === Performance Tuning ===
+
+    # Enable debug logging (logger.debug() calls)
+    # Disabling reduces CPU overhead and increases control frequency
+    # Default: False (production mode)
+    enable_debug_logging: bool = False
+
+    # Log performance metrics every N control cycles (0 = disabled)
+    # Useful for profiling without per-cycle logging overhead
+    # Example: 150 means log every ~1 second at 150 Hz
+    performance_log_interval: int = 0
+
 
 @TeleoperatorConfig.register_subclass("openarm_leader")
 @dataclass

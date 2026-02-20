@@ -109,6 +109,86 @@ from lerobot.utils.utils import init_logging, move_cursor_up
 from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
 
+def display_motor_status(
+    obs: dict[str, float],
+    label: str = "Leader Status",
+    max_joints: int = 8,
+) -> int:
+    """
+    Display motor status (position, velocity, torque) in a table format.
+    
+    Args:
+        obs: Observation dictionary with keys like "joint_1.pos", "joint_1.vel", "joint_1.torque", etc.
+        label: Title for the display
+        max_joints: Maximum number of joints to display
+    
+    Returns:
+        Number of lines printed (for cursor management)
+    """
+    print(f"\n{label}:")
+    print(f"{'Joint':<12} | {'Pos [°]':>10} | {'Vel [°/s]':>10} | {'Torque [Nm]':>12}")
+    print("-" * 60)
+    
+    lines_printed = 3  # Header lines
+    
+    for i in range(1, max_joints + 1):
+        joint_name = f"joint_{i}"
+        pos_key = f"{joint_name}.pos"
+        vel_key = f"{joint_name}.vel"
+        torque_key = f"{joint_name}.torque"
+        
+        # Try both with and without prefix for bimanual robots
+        if pos_key not in obs:
+            # This might be a prefixed key, skip for now
+            continue
+            
+        pos = obs.get(pos_key, 0.0)
+        vel = obs.get(vel_key, 0.0)
+        torque = obs.get(torque_key, 0.0)
+        
+        if isinstance(pos, (int, float)) and isinstance(vel, (int, float)) and isinstance(torque, (int, float)):
+            print(f"{joint_name:<12} | {pos:>10.2f} | {vel:>10.2f} | {torque:>12.3f}")
+            lines_printed += 1
+    
+    gripper_pos = obs.get("gripper.pos")
+    if gripper_pos is not None:
+        gripper_vel = obs.get("gripper.vel", 0.0)
+        gripper_torque = obs.get("gripper.torque", 0.0)
+        print(f"{'gripper':<12} | {gripper_pos:>10.2f} | {gripper_vel:>10.2f} | {gripper_torque:>12.3f}")
+        lines_printed += 1
+    
+    return lines_printed
+
+
+def display_bimanual_motor_status(
+    obs: dict[str, float],
+) -> int:
+    """
+    Display motor status for bimanual robots (left and right arms).
+    
+    Args:
+        obs: Observation dictionary with prefixed keys like "left_joint_1.pos", "right_joint_1.pos", etc.
+    
+    Returns:
+        Total number of lines printed
+    """
+    total_lines = 0
+    
+    # Display left arm
+    left_obs = {key.removeprefix("left_"): value for key, value in obs.items() if key.startswith("left_")}
+    if left_obs:
+        left_lines = display_motor_status(left_obs, label="LEFT ARM Status", max_joints=7)
+        total_lines += left_lines
+    
+    # Display right arm
+    right_obs = {key.removeprefix("right_"): value for key, value in obs.items() if key.startswith("right_")}
+    if right_obs:
+        right_lines = display_motor_status(right_obs, label="RIGHT ARM Status", max_joints=7)
+        total_lines += right_lines
+    
+    return total_lines
+
+
 @dataclass
 class TeleoperateConfig:
     # TODO: pepijn, steven: if more robots require multiple teleoperators (like lekiwi) its good to make this possibele in teleop.py and record.py with List[Teleoperator]
@@ -262,18 +342,37 @@ def teleop_loop(
                 compress_images=display_compressed_images,
             )
 
-            print("\n" + "-" * (display_len + 10))
-            print(f"{'NAME':<{display_len}} | {'NORM':>7}")
-            # Display the final robot action that was sent
+            # Display motor status from observation
+            # Check if this is a bimanual robot
+            is_bimanual = any(key.startswith("left_") and key.endswith(".pos") for key in obs.keys())
+            
+            if is_bimanual:
+                lines_printed = display_bimanual_motor_status(obs)
+            else:
+                lines_printed = display_motor_status(obs, label="Motor Status")
+            
+            # Display action commands
+            print(f"\n{'Action Commands Sent':<40}")
+            print(f"{'Name':<{display_len}} | {'Value':>10}")
+            print("-" * (display_len + 15))
+            action_lines = 0
             for motor, value in robot_action_to_send.items():
-                print(f"{motor:<{display_len}} | {value:>7.2f}")
-            move_cursor_up(len(robot_action_to_send) + 3)
+                print(f"{motor:<{display_len}} | {value:>10.2f}")
+                action_lines += 1
+            
+            # Calculate total lines for cursor movement
+            total_lines = lines_printed + action_lines + 4  # +4 for header lines
+        else:
+            total_lines = 0
 
         dt_s = time.perf_counter() - loop_start
         precise_sleep(max(1 / fps - dt_s, 0.0))
         loop_s = time.perf_counter() - loop_start
-        print(f"Teleop loop time: {loop_s * 1e3:.2f}ms ({1 / loop_s:.0f} Hz)")
-        move_cursor_up(1)
+        
+        # Display loop time and performance metrics
+        if display_data:
+            print(f"\n{'Teleop loop time':<40} | {loop_s * 1e3:>10.2f} ms ({1 / loop_s:>6.0f} Hz)")
+            move_cursor_up(total_lines + 2)
 
         if duration is not None and time.perf_counter() - start >= duration:
             return
