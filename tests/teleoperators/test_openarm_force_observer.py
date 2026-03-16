@@ -492,5 +492,184 @@ class TestForceObserverObservationHandling:
             assert np.allclose(tau_ext, -1.0)
 
 
+class TestDobRfobForceObserver:
+    """Test DOB+RFOB force observer behavior."""
+
+    def test_dob_rfob_observer_estimate_shape(self):
+        from lerobot.teleoperators.openarm_leader.force_observer import DobRfobForceObserver
+
+        with patch(
+            "lerobot.teleoperators.openarm_leader.force_observer.OpenArmIK"
+        ) as mock_ik:
+            mock_ik_instance = MagicMock()
+            mock_ik_instance.solve_tau.return_value = np.zeros(7)
+            mock_ik.return_value = mock_ik_instance
+
+            observer = DobRfobForceObserver(
+                urdf_path="/fake/path.urdf",
+                gravity_vector=[0.0, 0.0, -9.81],
+                gravity_gain=1.0,
+                dob_lpf_cutoff_hz=20.0,
+                rfob_lpf_cutoff_hz=10.0,
+                torque_limits=[10.0] * 7,
+                friction_viscous=[0.0] * 7,
+                friction_coulomb=[0.0] * 7,
+                velocity_lpf_cutoff_hz=30.0,
+                divergence_threshold_nm=3.0,
+                num_arm_joints=7,
+            )
+
+            observation = {f"joint_{i}.pos": 0.0 for i in range(1, 8)}
+            observation.update({f"joint_{i}.torque": 0.2 for i in range(1, 8)})
+
+            tau_ext = observer.estimate(observation, dt_s=0.01)
+
+            assert tau_ext.shape == (7,)
+            assert np.all(np.isfinite(tau_ext))
+
+    def test_dob_rfob_observer_torque_limit(self):
+        from lerobot.teleoperators.openarm_leader.force_observer import DobRfobForceObserver
+
+        with patch(
+            "lerobot.teleoperators.openarm_leader.force_observer.OpenArmIK"
+        ) as mock_ik:
+            mock_ik_instance = MagicMock()
+            mock_ik_instance.solve_tau.return_value = np.zeros(7)
+            mock_ik.return_value = mock_ik_instance
+
+            observer = DobRfobForceObserver(
+                urdf_path="/fake/path.urdf",
+                gravity_vector=[0.0, 0.0, -9.81],
+                gravity_gain=1.0,
+                dob_lpf_cutoff_hz=20.0,
+                rfob_lpf_cutoff_hz=10.0,
+                torque_limits=[0.3] * 7,
+                friction_viscous=[0.0] * 7,
+                friction_coulomb=[0.0] * 7,
+                velocity_lpf_cutoff_hz=30.0,
+                divergence_threshold_nm=3.0,
+                num_arm_joints=7,
+            )
+
+            observation = {f"joint_{i}.pos": 0.0 for i in range(1, 8)}
+            observation.update({f"joint_{i}.torque": 2.0 for i in range(1, 8)})
+
+            tau_ext = observer.estimate(observation, dt_s=0.01)
+
+            assert np.allclose(tau_ext, 0.3)
+
+    def test_dob_rfob_observer_diagnostics(self):
+        from lerobot.teleoperators.openarm_leader.force_observer import DobRfobForceObserver
+
+        with patch(
+            "lerobot.teleoperators.openarm_leader.force_observer.OpenArmIK"
+        ) as mock_ik:
+            mock_ik_instance = MagicMock()
+            mock_ik_instance.solve_tau.return_value = np.zeros(7)
+            mock_ik.return_value = mock_ik_instance
+
+            observer = DobRfobForceObserver(
+                urdf_path="/fake/path.urdf",
+                gravity_vector=[0.0, 0.0, -9.81],
+                gravity_gain=1.0,
+                dob_lpf_cutoff_hz=20.0,
+                rfob_lpf_cutoff_hz=10.0,
+                torque_limits=[10.0] * 7,
+                friction_viscous=[0.0] * 7,
+                friction_coulomb=[0.0] * 7,
+                velocity_lpf_cutoff_hz=30.0,
+                divergence_threshold_nm=1.0,
+                num_arm_joints=7,
+            )
+
+            observation = {f"joint_{i}.pos": 0.0 for i in range(1, 8)}
+            observation.update({f"joint_{i}.torque": 0.2 for i in range(1, 8)})
+
+            tau_ext, diagnostics = observer.estimate_with_diagnostics(observation, dt_s=0.01)
+            assert tau_ext.shape == (7,)
+            assert diagnostics["observer_type"] == "dob_rfob"
+            assert isinstance(diagnostics["confidence"], float)
+            assert isinstance(diagnostics["diverged"], bool)
+
+
+class TestForceObserverFactory:
+    """Test observer factory selection."""
+
+    def test_factory_returns_legacy_for_simple_mode(self):
+        from lerobot.teleoperators.openarm_leader.force_observer import ForceObserver, create_force_observer
+
+        with patch(
+            "lerobot.teleoperators.openarm_leader.force_observer.OpenArmIK"
+        ) as mock_ik:
+            mock_ik.return_value = MagicMock()
+            observer = create_force_observer(
+                observer_type="simple",
+                urdf_path="/fake/path.urdf",
+                gravity_vector=[0.0, 0.0, -9.81],
+                gravity_gain=1.0,
+                lpf_cutoff_hz=10.0,
+                torque_limits=[1.0] * 7,
+                dob_lpf_cutoff_hz=20.0,
+                friction_viscous=[0.0] * 7,
+                friction_coulomb=[0.0] * 7,
+                velocity_lpf_cutoff_hz=30.0,
+                divergence_threshold_nm=3.0,
+            )
+
+            assert isinstance(observer, ForceObserver)
+
+    def test_factory_returns_dob_rfob_mode(self):
+        from lerobot.teleoperators.openarm_leader.force_observer import (
+            DobRfobForceObserver,
+            create_force_observer,
+        )
+
+        with patch(
+            "lerobot.teleoperators.openarm_leader.force_observer.OpenArmIK"
+        ) as mock_ik:
+            mock_ik.return_value = MagicMock()
+            observer = create_force_observer(
+                observer_type="dob_rfob",
+                urdf_path="/fake/path.urdf",
+                gravity_vector=[0.0, 0.0, -9.81],
+                gravity_gain=1.0,
+                lpf_cutoff_hz=10.0,
+                torque_limits=[1.0] * 7,
+                dob_lpf_cutoff_hz=20.0,
+                friction_viscous=[0.0] * 7,
+                friction_coulomb=[0.0] * 7,
+                velocity_lpf_cutoff_hz=30.0,
+                divergence_threshold_nm=3.0,
+            )
+
+            assert isinstance(observer, DobRfobForceObserver)
+
+    def test_legacy_observer_diagnostics(self):
+        from lerobot.teleoperators.openarm_leader.force_observer import ForceObserver
+
+        with patch(
+            "lerobot.teleoperators.openarm_leader.force_observer.OpenArmIK"
+        ) as mock_ik:
+            mock_ik_instance = MagicMock()
+            mock_ik_instance.solve_tau.return_value = np.zeros(7)
+            mock_ik.return_value = mock_ik_instance
+
+            observer = ForceObserver(
+                urdf_path="/fake/path.urdf",
+                gravity_vector=[0.0, 0.0, -9.81],
+                gravity_gain=1.0,
+                lpf_cutoff_hz=0.0,
+                torque_limits=[0.2] * 7,
+                num_arm_joints=7,
+            )
+
+            observation = {f"joint_{i}.pos": 0.0 for i in range(1, 8)}
+            observation.update({f"joint_{i}.torque": 1.0 for i in range(1, 8)})
+
+            _, diagnostics = observer.estimate_with_diagnostics(observation, dt_s=0.01)
+            assert diagnostics["observer_type"] == "simple"
+            assert diagnostics["diverged"] is False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

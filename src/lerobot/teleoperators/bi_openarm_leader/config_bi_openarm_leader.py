@@ -50,6 +50,23 @@ class BiOpenArmLeaderConfig(TeleoperatorConfig):
     force_feedback_enabled: bool = False
     force_feedback_gain: float = 0.1
     force_feedback_lpf_cutoff_hz: float = 10.0
+    force_feedback_observer_type: str = "simple"
+    force_feedback_dob_lpf_cutoff_hz: float = 20.0
+    force_feedback_velocity_lpf_cutoff_hz: float = 30.0
+    force_feedback_friction_viscous: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    force_feedback_friction_coulomb: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    force_feedback_health_monitoring_enabled: bool = True
+    force_feedback_divergence_threshold_nm: float = 3.0
+    force_feedback_confidence_floor: float = 0.5
+    force_feedback_metrics_log_interval: int = 100
+    force_feedback_metrics_window: int = 200
+    force_feedback_metrics_csv_enabled: bool = False
+    force_feedback_metrics_csv_path: str = ""
+    force_feedback_metrics_csv_flush_interval: int = 100
     force_feedback_torque_limits: list[float] = field(
         default_factory=lambda: [1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5]
     )

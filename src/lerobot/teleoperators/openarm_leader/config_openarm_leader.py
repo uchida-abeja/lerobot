@@ -132,6 +132,50 @@ class OpenArmLeaderConfigBase:
     # Set to 0 to disable filtering.
     force_feedback_lpf_cutoff_hz: float = 10.0
 
+    # Force observer type.
+    # - "simple": legacy gravity subtraction estimator
+    # - "dob_rfob": DOB+RFOB style estimator with nominal internal model
+    force_feedback_observer_type: str = "simple"
+
+    # DOB Q-filter cutoff [Hz] for lumped disturbance estimation.
+    force_feedback_dob_lpf_cutoff_hz: float = 20.0
+
+    # Velocity LPF cutoff [Hz] used by DOB+RFOB mode.
+    force_feedback_velocity_lpf_cutoff_hz: float = 30.0
+
+    # Joint-wise friction model parameters used by DOB+RFOB mode.
+    # tau_fric = viscous * velocity + coulomb * tanh(20 * velocity)
+    force_feedback_friction_viscous: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    force_feedback_friction_coulomb: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+
+    # Enable observer health-based safety handling in teleoperation loop.
+    force_feedback_health_monitoring_enabled: bool = True
+
+    # Absolute disturbance threshold [Nm] used to detect observer divergence.
+    force_feedback_divergence_threshold_nm: float = 3.0
+
+    # Minimum confidence for full feedback. Below this value, feedback is scaled down.
+    force_feedback_confidence_floor: float = 0.5
+
+    # Force feedback diagnostics logging interval in control cycles (0 disables logging).
+    force_feedback_metrics_log_interval: int = 100
+
+    # Rolling window size used for force feedback diagnostics aggregation.
+    force_feedback_metrics_window: int = 200
+
+    # Export per-cycle force feedback diagnostics to CSV.
+    force_feedback_metrics_csv_enabled: bool = False
+
+    # Output path for CSV export. If empty and export is enabled, a default path is used.
+    force_feedback_metrics_csv_path: str = ""
+
+    # Flush CSV output every N rows (helps preserve data during long runs).
+    force_feedback_metrics_csv_flush_interval: int = 100
+
     # Per-joint torque limits for the external torque term [Nm].
     # Conservative defaults to keep the leader safe.
     # [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6, joint_7]
