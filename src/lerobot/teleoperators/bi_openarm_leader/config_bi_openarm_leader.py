@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from lerobot.teleoperators.openarm_leader import OpenArmLeaderConfigBase
 
@@ -36,3 +36,53 @@ class BiOpenArmLeaderConfig(TeleoperatorConfig):
     # Gravity compensation gain (applied to both arms unless overridden in arm configs)
     # Adjust to compensate for URDF parameter inaccuracies
     gravity_compensation_gain: float = 0.7
+
+    # URDF path and gravity vector for dynamics computations
+    urdf_path: str = "${LEROBOT_ROOT}/src/lerobot/teleoperators/openarm_leader/openarm.urdf"
+    gravity_vector: list[float] = field(default_factory=lambda: [0.0, 0.0, -9.81])
+
+    # Software torque limits for gravity compensation [Nm]
+    software_torque_limits: list[float] = field(
+        default_factory=lambda: [8.0, 8.0, 5.0, 5.0, 2.0, 2.0, 2.0]
+    )
+
+    # Force feedback settings (applied to both arms)
+    force_feedback_enabled: bool = False
+    force_feedback_gain: float = 0.1
+    force_feedback_lpf_cutoff_hz: float = 10.0
+    force_feedback_observer_type: str = "simple"
+    force_feedback_dob_lpf_cutoff_hz: float = 20.0
+    force_feedback_velocity_lpf_cutoff_hz: float = 30.0
+    force_feedback_friction_viscous: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    force_feedback_friction_coulomb: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    force_feedback_health_monitoring_enabled: bool = True
+    force_feedback_divergence_threshold_nm: float = 3.0
+    force_feedback_confidence_floor: float = 0.5
+    force_feedback_metrics_log_interval: int = 100
+    force_feedback_metrics_window: int = 200
+    force_feedback_metrics_csv_enabled: bool = False
+    force_feedback_metrics_csv_path: str = ""
+    force_feedback_metrics_csv_flush_interval: int = 100
+    force_feedback_torque_limits: list[float] = field(
+        default_factory=lambda: [1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5]
+    )
+    force_feedback_gripper_gain: float = 0.18
+    force_feedback_gripper_torque_limit: float = 0.18
+    force_feedback_gripper_deadband_nm: float = 0.03
+    force_feedback_gripper_friction_viscous: float = 0.01
+    force_feedback_gripper_friction_coulomb: float = 0.06
+    force_feedback_gripper_lpf_cutoff_hz: float = 8.0
+    force_feedback_gripper_pos_error_deadband_deg: float = 2.0
+    force_feedback_gripper_pos_error_full_scale_deg: float = 8.0
+    force_feedback_gripper_position_kp: float = 1.5
+    force_feedback_gripper_position_kd: float = 0.03
+    force_feedback_position_kp: list[float] = field(
+        default_factory=lambda: [50.0, 50.0, 50.0, 50.0, 10.0, 10.0, 10.0, 10.0]
+    )
+    force_feedback_position_kd: list[float] = field(
+        default_factory=lambda: [2.0, 2.0, 2.0, 2.0, 0.2, 0.2, 0.2, 0.2]
+    )

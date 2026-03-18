@@ -174,6 +174,129 @@ lerobot-teleoperate \
     --teleop.id=my_leader
 ```
 
+### Force Feedback (Experimental)
+
+OpenArm supports a simple force feedback mode that estimates external torque on the follower and
+applies it to the leader. This requires `manual_control=false`, the OpenArm URDF, and Pinocchio.
+
+```bash
+lerobot-teleoperate \
+    --robot.type=openarm_follower \
+    --robot.port=can0 \
+    --teleop.type=openarm_leader \
+    --teleop.port=can1 \
+    --teleop.manual_control=false \
+    --teleop.force_feedback_enabled=true \
+    --teleop.force_feedback_gain=0.1
+```
+
+For data collection, the same flags work with `lerobot-record`.
+
+#### High-Frequency Control (100Hz)
+
+For stable 100Hz teleoperation, use Makefile targets that configure real-time priorities and CPU isolation:
+
+```bash
+# One-time kernel setup (requires reboot)
+make setup-realtime-100hz ISOLATED_CPUS=6,7
+
+# Verify real-time readiness
+make check-realtime
+
+# Run 100Hz teleoperation with gravity compensation
+make teleop-openarm-100hz
+
+# Run 100Hz with force feedback (recommended: disable display_data)
+make teleop-openarm-100hz-force-feedback FORCE_GAIN=0.1
+```
+
+**Camera FPS and Control Loop Synchronization:**
+
+Force feedback operates at **sensor level** (torque and position) and is **independent of camera frames**.
+However, for data recording or visualization at 100Hz:
+
+- **Recommended**: Use `--display_data=false` with force feedback to avoid camera bottlenecks
+- **Camera frame rate**: Cameras typically run at 30-60 FPS. If lower than control frequency (100Hz),
+  the same frame may be used for multiple control cycles
+- **Recording strategy**: Use separate pipelines for high-frequency sensor data and lower-frequency vision data
+  to preserve data integrity during learning
+
+#### Configuration Parameters for Force Feedback
+
+| Parameter                       | Default | Description                                      |
+| ------------------------------- | ------- | ------------------------------------------------ |
+| `force_feedback_enabled`        | `False` | Enable force feedback                            |
+| `force_feedback_gain`           | `0.1`   | External torque gain (start low)                 |
+| `force_feedback_lpf_cutoff_hz`  | `10.0`  | Low-pass filter cutoff (Hz)                      |
+| `force_feedback_observer_type`  | `simple` | Observer type: `simple` or `dob_rfob`         |
+| `force_feedback_dob_lpf_cutoff_hz` | `20.0` | DOB disturbance LPF cutoff (Hz)               |
+| `force_feedback_velocity_lpf_cutoff_hz` | `30.0` | Velocity LPF cutoff used by `dob_rfob`      |
+| `force_feedback_friction_viscous` | `[0..]` | Per-joint viscous friction coefficients       |
+| `force_feedback_friction_coulomb` | `[0..]` | Per-joint coulomb friction coefficients       |
+| `force_feedback_health_monitoring_enabled` | `True` | Enable confidence/divergence safety handling |
+| `force_feedback_divergence_threshold_nm` | `3.0` | Divergence threshold for disturbance channel (Nm) |
+| `force_feedback_confidence_floor` | `0.5` | Confidence floor for full feedback scaling      |
+| `force_feedback_metrics_log_interval` | `100` | Log diagnostics every N control cycles (`0` disables) |
+| `force_feedback_metrics_window` | `200` | Rolling window for diagnostics aggregation      |
+| `force_feedback_metrics_csv_enabled` | `False` | Export per-cycle diagnostics to CSV           |
+| `force_feedback_metrics_csv_path` | `""` | CSV output path (defaults to `logs/force_feedback_metrics.csv`) |
+| `force_feedback_metrics_csv_flush_interval` | `100` | Flush CSV file every N rows                  |
+| `force_feedback_torque_limits`  | Per-joint | Max external torque per joint (Nm)          |
+
+For initial tuning, keep the default `simple` observer, then switch to `dob_rfob` with low
+`force_feedback_gain` and conservative torque limits.
+
+When CSV export is enabled, each row includes observer diagnostics and loop timing (`loop_s`) so
+you can correlate stability issues with control-cycle jitter.
+
+#### A/B Presets: `simple` vs `dob_rfob`
+
+Use the following presets to compare observer behavior under the same task and hardware conditions.
+
+```bash
+# A: Legacy simple observer (baseline)
+lerobot-teleoperate \
+    --robot.type=openarm_follower \
+    --robot.port=can0 \
+    --teleop.type=openarm_leader \
+    --teleop.port=can1 \
+    --teleop.manual_control=false \
+    --teleop.force_feedback_enabled=true \
+    --teleop.force_feedback_gain=0.08 \
+    --teleop.force_feedback_observer_type=simple \
+    --teleop.force_feedback_metrics_csv_enabled=true \
+    --teleop.force_feedback_metrics_csv_path=logs/ff_simple.csv \
+    --teleop.force_feedback_metrics_log_interval=100 \
+    --display_data=false \
+    --fps=100
+
+# B: DOB+RFOB observer (candidate)
+lerobot-teleoperate \
+    --robot.type=openarm_follower \
+    --robot.port=can0 \
+    --teleop.type=openarm_leader \
+    --teleop.port=can1 \
+    --teleop.manual_control=false \
+    --teleop.force_feedback_enabled=true \
+    --teleop.force_feedback_gain=0.08 \
+    --teleop.force_feedback_observer_type=dob_rfob \
+    --teleop.force_feedback_dob_lpf_cutoff_hz=20.0 \
+    --teleop.force_feedback_velocity_lpf_cutoff_hz=30.0 \
+    --teleop.force_feedback_health_monitoring_enabled=true \
+    --teleop.force_feedback_metrics_csv_enabled=true \
+    --teleop.force_feedback_metrics_csv_path=logs/ff_dob_rfob.csv \
+    --teleop.force_feedback_metrics_log_interval=100 \
+    --display_data=false \
+    --fps=100
+```
+
+Recommended A/B workflow:
+
+1. Keep task, payload, and contact condition identical between runs.
+2. Start from low gain (`force_feedback_gain<=0.1`) and conservative torque limits.
+3. Compare `diverged` rate, `confidence`, `saturated_joint_count`, and `loop_s` in CSV.
+4. Increase gain only if `diverged` stays near zero and cycle time remains stable.
+
 ### Bimanual Teleoperation
 
 To teleoperate a bimanual OpenArm setup with two leader and two follower arms:

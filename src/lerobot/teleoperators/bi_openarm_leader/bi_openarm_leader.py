@@ -54,6 +54,38 @@ class BiOpenArmLeader(Teleoperator):
             # Propagate gravity compensation settings from bimanual config
             gravity_compensation=config.gravity_compensation,
             gravity_compensation_gain=config.gravity_compensation_gain,
+            urdf_path=config.urdf_path,
+            gravity_vector=config.gravity_vector,
+            software_torque_limits=config.software_torque_limits,
+            force_feedback_enabled=config.force_feedback_enabled,
+            force_feedback_gain=config.force_feedback_gain,
+            force_feedback_lpf_cutoff_hz=config.force_feedback_lpf_cutoff_hz,
+            force_feedback_observer_type=config.force_feedback_observer_type,
+            force_feedback_dob_lpf_cutoff_hz=config.force_feedback_dob_lpf_cutoff_hz,
+            force_feedback_velocity_lpf_cutoff_hz=config.force_feedback_velocity_lpf_cutoff_hz,
+            force_feedback_friction_viscous=config.force_feedback_friction_viscous,
+            force_feedback_friction_coulomb=config.force_feedback_friction_coulomb,
+            force_feedback_health_monitoring_enabled=config.force_feedback_health_monitoring_enabled,
+            force_feedback_divergence_threshold_nm=config.force_feedback_divergence_threshold_nm,
+            force_feedback_confidence_floor=config.force_feedback_confidence_floor,
+            force_feedback_metrics_log_interval=config.force_feedback_metrics_log_interval,
+            force_feedback_metrics_window=config.force_feedback_metrics_window,
+            force_feedback_metrics_csv_enabled=config.force_feedback_metrics_csv_enabled,
+            force_feedback_metrics_csv_path=config.force_feedback_metrics_csv_path,
+            force_feedback_metrics_csv_flush_interval=config.force_feedback_metrics_csv_flush_interval,
+            force_feedback_torque_limits=config.force_feedback_torque_limits,
+            force_feedback_gripper_gain=config.force_feedback_gripper_gain,
+            force_feedback_gripper_torque_limit=config.force_feedback_gripper_torque_limit,
+            force_feedback_gripper_deadband_nm=config.force_feedback_gripper_deadband_nm,
+            force_feedback_gripper_friction_viscous=config.force_feedback_gripper_friction_viscous,
+            force_feedback_gripper_friction_coulomb=config.force_feedback_gripper_friction_coulomb,
+            force_feedback_gripper_lpf_cutoff_hz=config.force_feedback_gripper_lpf_cutoff_hz,
+            force_feedback_gripper_pos_error_deadband_deg=config.force_feedback_gripper_pos_error_deadband_deg,
+            force_feedback_gripper_pos_error_full_scale_deg=config.force_feedback_gripper_pos_error_full_scale_deg,
+            force_feedback_gripper_position_kp=config.force_feedback_gripper_position_kp,
+            force_feedback_gripper_position_kd=config.force_feedback_gripper_position_kd,
+            force_feedback_position_kp=config.force_feedback_position_kp,
+            force_feedback_position_kd=config.force_feedback_position_kd,
         )
 
         right_arm_config = OpenArmLeaderConfig(
@@ -71,6 +103,38 @@ class BiOpenArmLeader(Teleoperator):
             # Propagate gravity compensation settings from bimanual config
             gravity_compensation=config.gravity_compensation,
             gravity_compensation_gain=config.gravity_compensation_gain,
+            urdf_path=config.urdf_path,
+            gravity_vector=config.gravity_vector,
+            software_torque_limits=config.software_torque_limits,
+            force_feedback_enabled=config.force_feedback_enabled,
+            force_feedback_gain=config.force_feedback_gain,
+            force_feedback_lpf_cutoff_hz=config.force_feedback_lpf_cutoff_hz,
+            force_feedback_observer_type=config.force_feedback_observer_type,
+            force_feedback_dob_lpf_cutoff_hz=config.force_feedback_dob_lpf_cutoff_hz,
+            force_feedback_velocity_lpf_cutoff_hz=config.force_feedback_velocity_lpf_cutoff_hz,
+            force_feedback_friction_viscous=config.force_feedback_friction_viscous,
+            force_feedback_friction_coulomb=config.force_feedback_friction_coulomb,
+            force_feedback_health_monitoring_enabled=config.force_feedback_health_monitoring_enabled,
+            force_feedback_divergence_threshold_nm=config.force_feedback_divergence_threshold_nm,
+            force_feedback_confidence_floor=config.force_feedback_confidence_floor,
+            force_feedback_metrics_log_interval=config.force_feedback_metrics_log_interval,
+            force_feedback_metrics_window=config.force_feedback_metrics_window,
+            force_feedback_metrics_csv_enabled=config.force_feedback_metrics_csv_enabled,
+            force_feedback_metrics_csv_path=config.force_feedback_metrics_csv_path,
+            force_feedback_metrics_csv_flush_interval=config.force_feedback_metrics_csv_flush_interval,
+            force_feedback_torque_limits=config.force_feedback_torque_limits,
+            force_feedback_gripper_gain=config.force_feedback_gripper_gain,
+            force_feedback_gripper_torque_limit=config.force_feedback_gripper_torque_limit,
+            force_feedback_gripper_deadband_nm=config.force_feedback_gripper_deadband_nm,
+            force_feedback_gripper_friction_viscous=config.force_feedback_gripper_friction_viscous,
+            force_feedback_gripper_friction_coulomb=config.force_feedback_gripper_friction_coulomb,
+            force_feedback_gripper_lpf_cutoff_hz=config.force_feedback_gripper_lpf_cutoff_hz,
+            force_feedback_gripper_pos_error_deadband_deg=config.force_feedback_gripper_pos_error_deadband_deg,
+            force_feedback_gripper_pos_error_full_scale_deg=config.force_feedback_gripper_pos_error_full_scale_deg,
+            force_feedback_gripper_position_kp=config.force_feedback_gripper_position_kp,
+            force_feedback_gripper_position_kd=config.force_feedback_gripper_position_kd,
+            force_feedback_position_kp=config.force_feedback_position_kp,
+            force_feedback_position_kd=config.force_feedback_position_kd,
         )
 
         self.left_arm = OpenArmLeader(left_arm_config)
@@ -88,7 +152,13 @@ class BiOpenArmLeader(Teleoperator):
 
     @cached_property
     def feedback_features(self) -> dict[str, type]:
-        return {}
+        left_arm_features = self.left_arm.feedback_features
+        right_arm_features = self.right_arm.feedback_features
+
+        return {
+            **{f"left_{k}": v for k, v in left_arm_features.items()},
+            **{f"right_{k}": v for k, v in right_arm_features.items()},
+        }
 
     @property
     def is_connected(self) -> bool:
@@ -129,8 +199,24 @@ class BiOpenArmLeader(Teleoperator):
         return action_dict
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
-        # TODO: Implement force feedback
-        raise NotImplementedError
+        if not feedback:
+            return
+
+        left_feedback = {
+            key.removeprefix("left_"): value
+            for key, value in feedback.items()
+            if key.startswith("left_")
+        }
+        right_feedback = {
+            key.removeprefix("right_"): value
+            for key, value in feedback.items()
+            if key.startswith("right_")
+        }
+
+        if left_feedback:
+            self.left_arm.send_feedback(left_feedback)
+        if right_feedback:
+            self.right_arm.send_feedback(right_feedback)
 
     def disconnect(self) -> None:
         self.left_arm.disconnect()
