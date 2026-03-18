@@ -88,9 +88,14 @@ class OpenArmLeader(Teleoperator):
                     gravity_vector=np.array(self.config.gravity_vector),
                     num_arm_joints=7,
                 )
-                logger.info(
-                    f"Gravity compensation enabled with gain={self.config.gravity_compensation_gain}"
-                )
+                if self.config.gravity_compensation:
+                    logger.info(
+                        f"Gravity compensation enabled with gain={self.config.gravity_compensation_gain}"
+                    )
+                else:
+                    logger.info(
+                        f"Dynamics model initialized for force feedback (gravity compensation disabled)"
+                    )
                 if self.config.manual_control:
                     logger.warning(
                         "Torque control requires manual_control=False for gravity compensation or force feedback. "
