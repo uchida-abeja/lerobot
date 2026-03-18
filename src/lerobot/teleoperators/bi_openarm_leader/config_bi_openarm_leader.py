@@ -73,6 +73,9 @@ class BiOpenArmLeaderConfig(TeleoperatorConfig):
     force_feedback_gripper_gain: float = 0.18
     force_feedback_gripper_torque_limit: float = 0.18
     force_feedback_gripper_deadband_nm: float = 0.03
+    force_feedback_gripper_friction_viscous: float = 0.01
+    force_feedback_gripper_friction_coulomb: float = 0.06
+    force_feedback_gripper_lpf_cutoff_hz: float = 8.0
     force_feedback_gripper_position_kp: float = 1.5
     force_feedback_gripper_position_kd: float = 0.03
     force_feedback_position_kp: list[float] = field(

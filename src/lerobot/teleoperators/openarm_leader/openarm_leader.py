@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import logging
+import math
 import os
 from pathlib import Path
 import time
@@ -53,6 +54,8 @@ class OpenArmLeader(Teleoperator):
         self._cycle_count = 0
         self._cycle_times: list[float] = []
         self._max_cycle_times = 100  # Keep rolling average of last 100 cycles
+        self._gripper_contact_lpf_state = 0.0
+        self._last_gripper_feedback_time: float | None = None
 
         # Arm motors
         motors: dict[str, Motor] = {}
@@ -121,6 +124,7 @@ class OpenArmLeader(Teleoperator):
         """Feedback features for force feedback (external torque per joint)."""
         features = {f"joint_{i}.tau_ext": float for i in range(1, 8)}
         features["gripper.tau_ext"] = float
+        features["gripper.vel"] = float
         return features
 
     @property
@@ -434,14 +438,31 @@ class OpenArmLeader(Teleoperator):
             [feedback.get(f"joint_{i}.tau_ext", 0.0) for i in range(1, 8)],
             dtype=float,
         )
-        gripper_tau_ext = float(feedback.get("gripper.tau_ext", 0.0))
+        gripper_tau_meas = float(feedback.get("gripper.tau_ext", 0.0))
+        gripper_vel_meas = float(feedback.get("gripper.vel", 0.0))
 
-        # Remove tiny gripper torque noise so the handle does not feel constantly sticky.
+        # Extract contact-like torque by subtracting a simple gripper friction model.
         gripper_deadband = max(0.0, float(self.config.force_feedback_gripper_deadband_nm))
-        if abs(gripper_tau_ext) <= gripper_deadband:
-            gripper_tau_ext = 0.0
+        gripper_friction = (
+            float(self.config.force_feedback_gripper_friction_coulomb)
+            + float(self.config.force_feedback_gripper_friction_viscous) * abs(gripper_vel_meas)
+        )
+        gripper_contact_mag = max(0.0, abs(gripper_tau_meas) - gripper_friction - gripper_deadband)
+        gripper_tau_ext = float(np.sign(gripper_tau_meas) * gripper_contact_mag)
+
+        now = time.perf_counter()
+        dt_s = None if self._last_gripper_feedback_time is None else now - self._last_gripper_feedback_time
+        self._last_gripper_feedback_time = now
+        if dt_s is None or dt_s <= 0.0 or self.config.force_feedback_gripper_lpf_cutoff_hz <= 0.0:
+            gripper_alpha = 1.0
         else:
-            gripper_tau_ext = float(np.sign(gripper_tau_ext) * (abs(gripper_tau_ext) - gripper_deadband))
+            gripper_alpha = 1.0 - math.exp(
+                -2.0 * math.pi * self.config.force_feedback_gripper_lpf_cutoff_hz * dt_s
+            )
+        self._gripper_contact_lpf_state = self._gripper_contact_lpf_state + gripper_alpha * (
+            gripper_tau_ext - self._gripper_contact_lpf_state
+        )
+        gripper_tau_ext = float(self._gripper_contact_lpf_state)
 
         if len(self.config.force_feedback_torque_limits) == 7:
             tau_ext = np.clip(
