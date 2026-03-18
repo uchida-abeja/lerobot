@@ -183,6 +183,11 @@ class OpenArmLeaderConfigBase:
         default_factory=lambda: [1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5]
     )
 
+    # Gripper force feedback scaling and saturation.
+    # The gripper feedback path uses measured follower gripper torque directly.
+    force_feedback_gripper_gain: float = 0.25
+    force_feedback_gripper_torque_limit: float = 0.25
+
     # MIT control gains for force feedback mode.
     force_feedback_position_kp: list[float] = field(
         default_factory=lambda: [50.0, 50.0, 50.0, 50.0, 10.0, 10.0, 10.0, 10.0]

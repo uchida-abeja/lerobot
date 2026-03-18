@@ -119,7 +119,9 @@ class OpenArmLeader(Teleoperator):
     @property
     def feedback_features(self) -> dict[str, type]:
         """Feedback features for force feedback (external torque per joint)."""
-        return {f"joint_{i}.tau_ext": float for i in range(1, 8)}
+        features = {f"joint_{i}.tau_ext": float for i in range(1, 8)}
+        features["gripper.tau_ext"] = float
+        return features
 
     @property
     def is_connected(self) -> bool:
@@ -432,6 +434,7 @@ class OpenArmLeader(Teleoperator):
             [feedback.get(f"joint_{i}.tau_ext", 0.0) for i in range(1, 8)],
             dtype=float,
         )
+        gripper_tau_ext = float(feedback.get("gripper.tau_ext", 0.0))
 
         if len(self.config.force_feedback_torque_limits) == 7:
             tau_ext = np.clip(
@@ -439,6 +442,13 @@ class OpenArmLeader(Teleoperator):
                 -np.array(self.config.force_feedback_torque_limits),
                 np.array(self.config.force_feedback_torque_limits),
             )
+        gripper_tau_ext = float(
+            np.clip(
+                gripper_tau_ext,
+                -self.config.force_feedback_gripper_torque_limit,
+                self.config.force_feedback_gripper_torque_limit,
+            )
+        )
 
         gravity_torques_raw = self.arm_ik.solve_tau(np.array(arm_positions))
         gravity_torques = gravity_torques_raw * self.config.gravity_compensation_gain
@@ -468,6 +478,27 @@ class OpenArmLeader(Teleoperator):
                 0.0,
                 torque_cmd[i],
             )
+
+        # Apply direct gripper haptic feedback from follower measured gripper torque.
+        gripper_state = states.get("gripper", {})
+        gripper_target_pos_deg = gripper_state.get("position", 0.0)
+        gripper_kp = self.config.force_feedback_position_kp[7]
+        gripper_kd = self.config.force_feedback_position_kd[7]
+        gripper_torque_cmd = self.config.force_feedback_gripper_gain * gripper_tau_ext
+        gripper_torque_cmd = float(
+            np.clip(
+                gripper_torque_cmd,
+                -self.config.force_feedback_gripper_torque_limit,
+                self.config.force_feedback_gripper_torque_limit,
+            )
+        )
+        commands["gripper"] = (
+            gripper_kp,
+            gripper_kd,
+            gripper_target_pos_deg,
+            0.0,
+            gripper_torque_cmd,
+        )
 
         try:
             self.bus._mit_control_batch(commands)
