@@ -194,6 +194,10 @@ class OpenArmLeaderConfigBase:
     force_feedback_gripper_friction_coulomb: float = 0.06
     # LPF for extracted gripper contact torque.
     force_feedback_gripper_lpf_cutoff_hz: float = 8.0
+    # Gate gripper haptics using leader/follower gripper position mismatch.
+    # This suppresses resistance during free motion and emphasizes blocked grasp contact.
+    force_feedback_gripper_pos_error_deadband_deg: float = 2.0
+    force_feedback_gripper_pos_error_full_scale_deg: float = 8.0
     # Dedicated gripper gains (softer than arm joints).
     force_feedback_gripper_position_kp: float = 1.5
     force_feedback_gripper_position_kd: float = 0.03

@@ -125,6 +125,7 @@ class OpenArmLeader(Teleoperator):
         features = {f"joint_{i}.tau_ext": float for i in range(1, 8)}
         features["gripper.tau_ext"] = float
         features["gripper.vel"] = float
+        features["gripper.pos"] = float
         return features
 
     @property
@@ -440,6 +441,7 @@ class OpenArmLeader(Teleoperator):
         )
         gripper_tau_meas = float(feedback.get("gripper.tau_ext", 0.0))
         gripper_vel_meas = float(feedback.get("gripper.vel", 0.0))
+        follower_gripper_pos_deg = float(feedback.get("gripper.pos", 0.0))
 
         # Extract contact-like torque by subtracting a simple gripper friction model.
         gripper_deadband = max(0.0, float(self.config.force_feedback_gripper_deadband_nm))
@@ -510,9 +512,23 @@ class OpenArmLeader(Teleoperator):
         # Apply direct gripper haptic feedback from follower measured gripper torque.
         gripper_state = states.get("gripper", {})
         gripper_target_pos_deg = gripper_state.get("position", 0.0)
+        gripper_pos_error = abs(gripper_target_pos_deg - follower_gripper_pos_deg)
+        pos_error_deadband = max(0.0, float(self.config.force_feedback_gripper_pos_error_deadband_deg))
+        pos_error_full_scale = max(
+            pos_error_deadband + 1e-6,
+            float(self.config.force_feedback_gripper_pos_error_full_scale_deg),
+        )
+        gripper_contact_gate = float(
+            np.clip(
+                (gripper_pos_error - pos_error_deadband)
+                / (pos_error_full_scale - pos_error_deadband),
+                0.0,
+                1.0,
+            )
+        )
         gripper_kp = self.config.force_feedback_gripper_position_kp
         gripper_kd = self.config.force_feedback_gripper_position_kd
-        gripper_torque_cmd = self.config.force_feedback_gripper_gain * gripper_tau_ext
+        gripper_torque_cmd = self.config.force_feedback_gripper_gain * gripper_contact_gate * gripper_tau_ext
         gripper_torque_cmd = float(
             np.clip(
                 gripper_torque_cmd,
