@@ -489,7 +489,8 @@ def teleop_loop(
                 _log_ff_metrics()
 
                 feedback = {f"joint_{i}.tau_ext": float(tau_ext[i - 1]) for i in range(1, 8)}
-                feedback["gripper.tau_ext"] = float(obs.get("gripper.torque", 0.0)) * applied_scale
+                # Keep gripper haptics independent from arm observer health scaling.
+                feedback["gripper.tau_ext"] = float(obs.get("gripper.torque", 0.0))
                 teleop.send_feedback(feedback)
             elif force_observers:
                 now = time.perf_counter()
@@ -531,7 +532,8 @@ def teleop_loop(
                             for i in range(1, 8)
                         }
                     )
-                    feedback[f"{side}_gripper.tau_ext"] = float(side_obs.get("gripper.torque", 0.0)) * applied_scale
+                    # Keep gripper haptics independent from arm observer health scaling.
+                    feedback[f"{side}_gripper.tau_ext"] = float(side_obs.get("gripper.torque", 0.0))
                 if feedback:
                     _log_ff_metrics()
                     teleop.send_feedback(feedback)
