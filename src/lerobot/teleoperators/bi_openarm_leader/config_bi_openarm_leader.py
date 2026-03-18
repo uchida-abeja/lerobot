@@ -70,8 +70,11 @@ class BiOpenArmLeaderConfig(TeleoperatorConfig):
     force_feedback_torque_limits: list[float] = field(
         default_factory=lambda: [1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5]
     )
-    force_feedback_gripper_gain: float = 0.25
-    force_feedback_gripper_torque_limit: float = 0.25
+    force_feedback_gripper_gain: float = 0.1
+    force_feedback_gripper_torque_limit: float = 0.12
+    force_feedback_gripper_deadband_nm: float = 0.08
+    force_feedback_gripper_position_kp: float = 2.0
+    force_feedback_gripper_position_kd: float = 0.05
     force_feedback_position_kp: list[float] = field(
         default_factory=lambda: [50.0, 50.0, 50.0, 50.0, 10.0, 10.0, 10.0, 10.0]
     )

@@ -436,6 +436,13 @@ class OpenArmLeader(Teleoperator):
         )
         gripper_tau_ext = float(feedback.get("gripper.tau_ext", 0.0))
 
+        # Remove tiny gripper torque noise so the handle does not feel constantly sticky.
+        gripper_deadband = max(0.0, float(self.config.force_feedback_gripper_deadband_nm))
+        if abs(gripper_tau_ext) <= gripper_deadband:
+            gripper_tau_ext = 0.0
+        else:
+            gripper_tau_ext = float(np.sign(gripper_tau_ext) * (abs(gripper_tau_ext) - gripper_deadband))
+
         if len(self.config.force_feedback_torque_limits) == 7:
             tau_ext = np.clip(
                 tau_ext,
@@ -482,8 +489,8 @@ class OpenArmLeader(Teleoperator):
         # Apply direct gripper haptic feedback from follower measured gripper torque.
         gripper_state = states.get("gripper", {})
         gripper_target_pos_deg = gripper_state.get("position", 0.0)
-        gripper_kp = self.config.force_feedback_position_kp[7]
-        gripper_kd = self.config.force_feedback_position_kd[7]
+        gripper_kp = self.config.force_feedback_gripper_position_kp
+        gripper_kd = self.config.force_feedback_gripper_position_kd
         gripper_torque_cmd = self.config.force_feedback_gripper_gain * gripper_tau_ext
         gripper_torque_cmd = float(
             np.clip(

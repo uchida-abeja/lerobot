@@ -76,6 +76,9 @@ class BiOpenArmLeader(Teleoperator):
             force_feedback_torque_limits=config.force_feedback_torque_limits,
             force_feedback_gripper_gain=config.force_feedback_gripper_gain,
             force_feedback_gripper_torque_limit=config.force_feedback_gripper_torque_limit,
+            force_feedback_gripper_deadband_nm=config.force_feedback_gripper_deadband_nm,
+            force_feedback_gripper_position_kp=config.force_feedback_gripper_position_kp,
+            force_feedback_gripper_position_kd=config.force_feedback_gripper_position_kd,
             force_feedback_position_kp=config.force_feedback_position_kp,
             force_feedback_position_kd=config.force_feedback_position_kd,
         )
@@ -117,6 +120,9 @@ class BiOpenArmLeader(Teleoperator):
             force_feedback_torque_limits=config.force_feedback_torque_limits,
             force_feedback_gripper_gain=config.force_feedback_gripper_gain,
             force_feedback_gripper_torque_limit=config.force_feedback_gripper_torque_limit,
+            force_feedback_gripper_deadband_nm=config.force_feedback_gripper_deadband_nm,
+            force_feedback_gripper_position_kp=config.force_feedback_gripper_position_kp,
+            force_feedback_gripper_position_kd=config.force_feedback_gripper_position_kd,
             force_feedback_position_kp=config.force_feedback_position_kp,
             force_feedback_position_kd=config.force_feedback_position_kd,
         )

@@ -185,8 +185,13 @@ class OpenArmLeaderConfigBase:
 
     # Gripper force feedback scaling and saturation.
     # The gripper feedback path uses measured follower gripper torque directly.
-    force_feedback_gripper_gain: float = 0.25
-    force_feedback_gripper_torque_limit: float = 0.25
+    force_feedback_gripper_gain: float = 0.1
+    force_feedback_gripper_torque_limit: float = 0.12
+    # Ignore tiny gripper torques to avoid constant sticky feel.
+    force_feedback_gripper_deadband_nm: float = 0.08
+    # Dedicated gripper gains (softer than arm joints).
+    force_feedback_gripper_position_kp: float = 2.0
+    force_feedback_gripper_position_kd: float = 0.05
 
     # MIT control gains for force feedback mode.
     force_feedback_position_kp: list[float] = field(
