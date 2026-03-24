@@ -30,6 +30,7 @@ from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnected
 
 from ..teleoperator import Teleoperator
 from .config_openarm_leader import OpenArmLeaderConfig
+from .position_sync import is_position_sync_controller
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,8 @@ class OpenArmLeader(Teleoperator):
         super().__init__(config)
         self.config = config
         self._last_states: dict[str, dict[str, float]] | None = None
+        # Cache once; the controller type never changes after init.
+        self._is_position_sync: bool = is_position_sync_controller(config)
 
         # Performance monitoring
         self._cycle_count = 0
@@ -235,6 +238,10 @@ class OpenArmLeader(Teleoperator):
             logger.info("Configuring motors for manual control (torque disabled)")
             return self.bus.disable_torque()
 
+        if self._is_position_sync:
+            logger.info("Configuring motors for bilateral position synchronization mode")
+            return self.bus.configure_motors()
+
         if self.config.force_feedback_enabled and self.arm_ik is not None:
             logger.info("Configuring motors for force feedback mode (soft control)")
             return self.bus.configure_motors()
@@ -265,14 +272,17 @@ class OpenArmLeader(Teleoperator):
 
         Reads all motor states (pos/vel/torque) in one CAN refresh cycle.
         """
-        start = time.perf_counter()
+        collect_perf_metrics = bool(
+            self.config.enable_debug_logging and self.config.performance_log_interval > 0
+        )
+        start = time.perf_counter() if collect_perf_metrics else None
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         action_dict: dict[str, Any] = {}
 
         # Use sync_read_all_states to get pos/vel/torque in one go
-        states = self.bus.sync_read_all_states()
+        states = self.read_motor_states()
 
         # Extract arm joint positions for gravity compensation (exclude gripper)
         arm_positions = []
@@ -295,7 +305,11 @@ class OpenArmLeader(Teleoperator):
         action_dict["gripper.torque"] = gripper_state.get("torque")
 
         # Apply gravity compensation if enabled
-        if self.config.gravity_compensation and self.arm_ik is not None:
+        if (
+            self.config.gravity_compensation
+            and self.arm_ik is not None
+            and not self._is_position_sync
+        ):
             if len(arm_positions) == 7:
                 try:
                     q = np.array(arm_positions)
@@ -321,11 +335,12 @@ class OpenArmLeader(Teleoperator):
                         if abs(original) > limit:
                             torques_limited.append((i + 1, original, gravity_torques[i]))
                     
-                    if torques_limited:
-                        logger.warning(
-                            f"Torque limits applied: "
-                            + ", ".join([f"joint_{j}: {o:.3f} -> {c:.3f} Nm" 
-                                        for j, o, c in torques_limited])
+                    if torques_limited and self.config.enable_debug_logging:
+                        logger.debug(
+                            "Torque limits applied: %s",
+                            ", ".join(
+                                [f"joint_{j}: {o:.3f} -> {c:.3f} Nm" for j, o, c in torques_limited]
+                            ),
                         )
                     
                     if self.config.enable_debug_logging:
@@ -343,26 +358,35 @@ class OpenArmLeader(Teleoperator):
                 )
 
         # Performance monitoring
-        dt_ms = (time.perf_counter() - start) * 1e3
-        self._cycle_times.append(dt_ms)
-        if len(self._cycle_times) > self._max_cycle_times:
-            self._cycle_times.pop(0)
-        self._cycle_count += 1
-        
-        # Log performance metrics periodically (if enabled)
-        if (
-            self.config.enable_debug_logging
-            and self.config.performance_log_interval > 0
-            and self._cycle_count % self.config.performance_log_interval == 0
-        ):
-            avg_time = sum(self._cycle_times) / len(self._cycle_times)
-            max_time = max(self._cycle_times)
-            freq = 1000.0 / avg_time if avg_time > 0 else 0
-            logger.debug(
-                f"{self} | Loop time: avg={avg_time:.2f}ms, max={max_time:.2f}ms ({freq:.0f} Hz)"
-            )
+        if collect_perf_metrics and start is not None:
+            dt_ms = (time.perf_counter() - start) * 1e3
+            self._cycle_times.append(dt_ms)
+            if len(self._cycle_times) > self._max_cycle_times:
+                self._cycle_times.pop(0)
+            self._cycle_count += 1
+
+            if self._cycle_count % self.config.performance_log_interval == 0:
+                avg_time = sum(self._cycle_times) / len(self._cycle_times)
+                max_time = max(self._cycle_times)
+                freq = 1000.0 / avg_time if avg_time > 0 else 0
+                logger.debug(
+                    f"{self} | Loop time: avg={avg_time:.2f}ms, max={max_time:.2f}ms ({freq:.0f} Hz)"
+                )
 
         return action_dict
+
+    def read_motor_states(self) -> dict[str, dict[str, float]]:
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        states = self.bus.sync_read_all_states()
+        self._last_states = states
+        return states
+
+    def send_mit_commands(self, commands: dict[str, tuple[float, float, float, float, float]]) -> None:
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+        self.bus._mit_control_batch(commands)
 
     def _apply_gravity_compensation(
         self, gravity_torques: np.ndarray, current_states: dict

@@ -137,6 +137,11 @@ class OpenArmLeaderConfigBase:
     # - "dob_rfob": DOB+RFOB style estimator with nominal internal model
     force_feedback_observer_type: str = "simple"
 
+    # Bilateral controller implementation.
+    # - "observer": follower torque observer + leader haptics (current implementation)
+    # - "position_sync": ROS2-style bilateral position synchronization
+    force_feedback_controller_type: str = "observer"
+
     # DOB Q-filter cutoff [Hz] for lumped disturbance estimation.
     force_feedback_dob_lpf_cutoff_hz: float = 20.0
 
@@ -208,6 +213,41 @@ class OpenArmLeaderConfigBase:
     )
     force_feedback_position_kd: list[float] = field(
         default_factory=lambda: [2.0, 2.0, 2.0, 2.0, 0.2, 0.2, 0.2, 0.2]
+    )
+
+    # === Position Synchronization Settings ===
+
+    # MIT gains applied on the leader while it tracks the follower state.
+    # List of 8 values: [joint_1, ..., joint_7, gripper]
+    position_sync_leader_position_kp: list[float] = field(
+        default_factory=lambda: [50.0, 50.0, 50.0, 50.0, 10.0, 10.0, 10.0, 8.0]
+    )
+    position_sync_leader_position_kd: list[float] = field(
+        default_factory=lambda: [2.0, 2.0, 2.0, 2.0, 0.2, 0.2, 0.2, 0.15]
+    )
+
+    # MIT gains applied on the follower while it tracks the leader state.
+    # List of 8 values: [joint_1, ..., joint_7, gripper]
+    position_sync_follower_position_kp: list[float] = field(
+        default_factory=lambda: [240.0, 240.0, 240.0, 240.0, 24.0, 31.0, 25.0, 25.0]
+    )
+    position_sync_follower_position_kd: list[float] = field(
+        default_factory=lambda: [5.0, 5.0, 3.0, 5.0, 0.3, 0.3, 0.3, 0.3]
+    )
+
+    # Joint-wise friction model used by the position synchronization controller.
+    # tau_fric = Fc * tanh(k * velocity_rad_s) + Fv * velocity_rad_s + Fo
+    position_sync_friction_fc: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    position_sync_friction_fv: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    position_sync_friction_fo: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    position_sync_friction_k: list[float] = field(
+        default_factory=lambda: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
     )
 
     # === Performance Tuning ===

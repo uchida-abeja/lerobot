@@ -106,6 +106,10 @@ from lerobot.teleoperators import (  # noqa: F401
 from lerobot.teleoperators.bi_openarm_leader import BiOpenArmLeader
 from lerobot.teleoperators.openarm_leader import OpenArmLeader
 from lerobot.teleoperators.openarm_leader.force_observer import create_force_observer
+from lerobot.teleoperators.openarm_leader.position_sync import (
+    OpenArmPositionSyncController,
+    is_position_sync_controller,
+)
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.robot_utils import precise_sleep
 from lerobot.utils.utils import init_logging, move_cursor_up
@@ -238,11 +242,13 @@ def teleop_loop(
         robot_observation_processor: An optional pipeline to process raw observations from the robot.
     """
 
-    display_len = max(len(key) for key in robot.action_features)
+    display_len = max(len(key) for key in robot.action_features) if display_data else 0
     force_observer = None
     last_feedback_time = None
     force_observers: dict[str, object] = {}
     last_feedback_times: dict[str, float | None] = {}
+    position_sync_controller: OpenArmPositionSyncController | None = None
+    position_sync_controllers: dict[str, OpenArmPositionSyncController] = {}
     ff_cycle_count = 0
     ff_metrics_window = int(getattr(teleop.config, "force_feedback_metrics_window", 200))
     ff_metrics_log_interval = int(getattr(teleop.config, "force_feedback_metrics_log_interval", 0))
@@ -366,6 +372,45 @@ def teleop_loop(
     if (
         isinstance(teleop, OpenArmLeader)
         and isinstance(robot, OpenArmFollower)
+        and is_position_sync_controller(teleop.config)
+    ):
+        position_sync_controller = OpenArmPositionSyncController(
+            urdf_path=teleop.config.urdf_path,
+            gravity_vector=teleop.config.gravity_vector,
+            gravity_gain=teleop.config.gravity_compensation_gain,
+            software_torque_limits=teleop.config.software_torque_limits,
+            leader_position_kp=teleop.config.position_sync_leader_position_kp,
+            leader_position_kd=teleop.config.position_sync_leader_position_kd,
+            follower_position_kp=teleop.config.position_sync_follower_position_kp,
+            follower_position_kd=teleop.config.position_sync_follower_position_kd,
+            friction_fc=teleop.config.position_sync_friction_fc,
+            friction_fv=teleop.config.position_sync_friction_fv,
+            friction_fo=teleop.config.position_sync_friction_fo,
+            friction_k=teleop.config.position_sync_friction_k,
+        )
+    elif (
+        isinstance(teleop, BiOpenArmLeader)
+        and isinstance(robot, BiOpenArmFollower)
+        and is_position_sync_controller(teleop.config)
+    ):
+        for side in ("left", "right"):
+            position_sync_controllers[side] = OpenArmPositionSyncController(
+                urdf_path=teleop.config.urdf_path,
+                gravity_vector=teleop.config.gravity_vector,
+                gravity_gain=teleop.config.gravity_compensation_gain,
+                software_torque_limits=teleop.config.software_torque_limits,
+                leader_position_kp=teleop.config.position_sync_leader_position_kp,
+                leader_position_kd=teleop.config.position_sync_leader_position_kd,
+                follower_position_kp=teleop.config.position_sync_follower_position_kp,
+                follower_position_kd=teleop.config.position_sync_follower_position_kd,
+                friction_fc=teleop.config.position_sync_friction_fc,
+                friction_fv=teleop.config.position_sync_friction_fv,
+                friction_fo=teleop.config.position_sync_friction_fo,
+                friction_k=teleop.config.position_sync_friction_k,
+            )
+    elif (
+        isinstance(teleop, OpenArmLeader)
+        and isinstance(robot, OpenArmFollower)
         and getattr(teleop.config, "force_feedback_enabled", False)
     ):
         try:
@@ -439,6 +484,13 @@ def teleop_loop(
                     "Force feedback disabled: failed to init observer for "
                     f"{side} arm ({exc})"
                 )
+    use_fast_motor_observation = bool(
+        not display_data
+        and (
+            position_sync_controller is not None
+            or bool(position_sync_controllers)
+        )
+    )
     start = time.perf_counter()
 
     try:
@@ -450,7 +502,10 @@ def teleop_loop(
             # Not really needed for now other than for visualization
             # teleop_action_processor can take None as an observation
             # given that it is the identity processor as default
-            obs = robot.get_observation()
+            if use_fast_motor_observation and hasattr(robot, "get_motor_observation"):
+                obs = robot.get_motor_observation()
+            else:
+                obs = robot.get_observation()
 
             # Get teleop action
             raw_action = teleop.get_action()
@@ -461,8 +516,41 @@ def teleop_loop(
             # Process action for robot through pipeline
             robot_action_to_send = robot_action_processor((teleop_action, obs))
 
-            # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
-            _ = robot.send_action(robot_action_to_send)
+            if position_sync_controller is not None:
+                leader_commands, follower_commands, _ = position_sync_controller.compute_commands(
+                    leader_state=raw_action,
+                    follower_state=obs,
+                    follower_goal_action=robot_action_to_send,
+                )
+                teleop.send_mit_commands(leader_commands)
+                robot.send_mit_commands(follower_commands)
+            elif position_sync_controllers:
+                for side, controller in position_sync_controllers.items():
+                    side_raw_action = {
+                        key.removeprefix(f"{side}_"): value
+                        for key, value in raw_action.items()
+                        if key.startswith(f"{side}_")
+                    }
+                    side_obs = {
+                        key.removeprefix(f"{side}_"): value
+                        for key, value in obs.items()
+                        if key.startswith(f"{side}_")
+                    }
+                    side_goal_action = {
+                        key.removeprefix(f"{side}_"): value
+                        for key, value in robot_action_to_send.items()
+                        if key.startswith(f"{side}_")
+                    }
+                    leader_commands, follower_commands, _ = controller.compute_commands(
+                        leader_state=side_raw_action,
+                        follower_state=side_obs,
+                        follower_goal_action=side_goal_action,
+                    )
+                    getattr(teleop, f"{side}_arm").send_mit_commands(leader_commands)
+                    getattr(robot, f"{side}_arm").send_mit_commands(follower_commands)
+            else:
+                # Send processed action to robot (robot_action_processor.to_output should return RobotAction)
+                _ = robot.send_action(robot_action_to_send)
 
             if force_observer is not None:
                 now = time.perf_counter()

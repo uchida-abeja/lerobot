@@ -16,5 +16,6 @@
 
 from .config_openarm_leader import OpenArmLeaderConfig, OpenArmLeaderConfigBase
 from .openarm_leader import OpenArmLeader
+from .position_sync import OpenArmPositionSyncController
 
-__all__ = ["OpenArmLeader", "OpenArmLeaderConfig", "OpenArmLeaderConfigBase"]
+__all__ = ["OpenArmLeader", "OpenArmLeaderConfig", "OpenArmLeaderConfigBase", "OpenArmPositionSyncController"]

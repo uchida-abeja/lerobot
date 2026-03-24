@@ -192,6 +192,40 @@ lerobot-teleoperate \
 
 For data collection, the same flags work with `lerobot-record`.
 
+#### Position Synchronization Mode
+
+ROS2 実装に近い双方向の位置同期型を試す場合は、observer ではなく `position_sync` controller を選びます。
+最初の bring-up では表示を切って低めのゲインから始めるのが安全です。
+
+```bash
+lerobot-teleoperate \
+    --fps=120 \
+    --display_data=false \
+    --robot.type=openarm_follower \
+    --robot.port=can0 \
+    --robot.side=right \
+    --robot.id=my_follower \
+    --teleop.type=openarm_leader \
+    --teleop.port=can1 \
+    --teleop.id=my_leader \
+    --teleop.manual_control=false \
+    --teleop.gravity_compensation=false \
+    --teleop.force_feedback_enabled=true \
+    --teleop.force_feedback_controller_type=position_sync \
+    --teleop.gravity_compensation_gain=0.7 \
+    --teleop.position_sync_leader_position_kp="[20,20,20,20,4,4,4,3]" \
+    --teleop.position_sync_leader_position_kd="[0.8,0.8,0.8,0.8,0.08,0.08,0.08,0.05]" \
+    --teleop.position_sync_follower_position_kp="[80,80,80,80,8,8,8,8]" \
+    --teleop.position_sync_follower_position_kd="[2,2,2,2,0.15,0.15,0.15,0.1]"
+```
+
+推奨 bring-up 手順:
+
+- まず `display_data=false` で leader/follower のみを接続して MIT 指令が安定して入るか確認する
+- 次に leader 側の `position_sync_leader_position_kp/kd` を少しずつ上げる
+- follower 側の追従遅れが残る場合にだけ `position_sync_follower_position_kp/kd` を上げる
+- 摩擦補償は free-motion が確認できてから `position_sync_friction_fc/fv/fo/k` を足す
+
 #### High-Frequency Control (100Hz)
 
 For stable 100Hz teleoperation, use Makefile targets that configure real-time priorities and CPU isolation:

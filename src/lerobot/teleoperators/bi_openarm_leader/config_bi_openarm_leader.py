@@ -51,6 +51,7 @@ class BiOpenArmLeaderConfig(TeleoperatorConfig):
     force_feedback_gain: float = 0.1
     force_feedback_lpf_cutoff_hz: float = 10.0
     force_feedback_observer_type: str = "simple"
+    force_feedback_controller_type: str = "observer"
     force_feedback_dob_lpf_cutoff_hz: float = 20.0
     force_feedback_velocity_lpf_cutoff_hz: float = 30.0
     force_feedback_friction_viscous: list[float] = field(
@@ -85,4 +86,30 @@ class BiOpenArmLeaderConfig(TeleoperatorConfig):
     )
     force_feedback_position_kd: list[float] = field(
         default_factory=lambda: [2.0, 2.0, 2.0, 2.0, 0.2, 0.2, 0.2, 0.2]
+    )
+
+    # Position synchronization settings (applied to both arms).
+    position_sync_leader_position_kp: list[float] = field(
+        default_factory=lambda: [50.0, 50.0, 50.0, 50.0, 10.0, 10.0, 10.0, 8.0]
+    )
+    position_sync_leader_position_kd: list[float] = field(
+        default_factory=lambda: [2.0, 2.0, 2.0, 2.0, 0.2, 0.2, 0.2, 0.15]
+    )
+    position_sync_follower_position_kp: list[float] = field(
+        default_factory=lambda: [240.0, 240.0, 240.0, 240.0, 24.0, 31.0, 25.0, 25.0]
+    )
+    position_sync_follower_position_kd: list[float] = field(
+        default_factory=lambda: [5.0, 5.0, 3.0, 5.0, 0.3, 0.3, 0.3, 0.3]
+    )
+    position_sync_friction_fc: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    position_sync_friction_fv: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    position_sync_friction_fo: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    position_sync_friction_k: list[float] = field(
+        default_factory=lambda: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
     )
