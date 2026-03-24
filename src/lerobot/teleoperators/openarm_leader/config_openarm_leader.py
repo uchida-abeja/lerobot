@@ -118,6 +118,150 @@ class OpenArmLeaderConfigBase:
         default_factory=lambda: [2.0, 2.0, 2.0, 2.0, 0.2, 0.2, 0.2, 0.2]
     )
 
+    # === Force Feedback Settings ===
+
+    # Enable simple force feedback using external torque estimation on the follower.
+    # Requires manual_control=False.
+    force_feedback_enabled: bool = False
+
+    # Force feedback gain for external torque applied to the leader.
+    # Keep small to avoid oscillations.
+    force_feedback_gain: float = 0.1
+
+    # Low-pass filter cutoff for external torque estimation [Hz].
+    # Set to 0 to disable filtering.
+    force_feedback_lpf_cutoff_hz: float = 10.0
+
+    # Force observer type.
+    # - "simple": legacy gravity subtraction estimator
+    # - "dob_rfob": DOB+RFOB style estimator with nominal internal model
+    force_feedback_observer_type: str = "simple"
+
+    # Bilateral controller implementation.
+    # - "observer": follower torque observer + leader haptics (current implementation)
+    # - "position_sync": ROS2-style bilateral position synchronization
+    force_feedback_controller_type: str = "observer"
+
+    # DOB Q-filter cutoff [Hz] for lumped disturbance estimation.
+    force_feedback_dob_lpf_cutoff_hz: float = 20.0
+
+    # Velocity LPF cutoff [Hz] used by DOB+RFOB mode.
+    force_feedback_velocity_lpf_cutoff_hz: float = 30.0
+
+    # Joint-wise friction model parameters used by DOB+RFOB mode.
+    # tau_fric = viscous * velocity + coulomb * tanh(20 * velocity)
+    force_feedback_friction_viscous: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    force_feedback_friction_coulomb: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+
+    # Enable observer health-based safety handling in teleoperation loop.
+    force_feedback_health_monitoring_enabled: bool = True
+
+    # Absolute disturbance threshold [Nm] used to detect observer divergence.
+    force_feedback_divergence_threshold_nm: float = 3.0
+
+    # Minimum confidence for full feedback. Below this value, feedback is scaled down.
+    force_feedback_confidence_floor: float = 0.5
+
+    # Force feedback diagnostics logging interval in control cycles (0 disables logging).
+    force_feedback_metrics_log_interval: int = 100
+
+    # Rolling window size used for force feedback diagnostics aggregation.
+    force_feedback_metrics_window: int = 200
+
+    # Export per-cycle force feedback diagnostics to CSV.
+    force_feedback_metrics_csv_enabled: bool = False
+
+    # Output path for CSV export. If empty and export is enabled, a default path is used.
+    force_feedback_metrics_csv_path: str = ""
+
+    # Flush CSV output every N rows (helps preserve data during long runs).
+    force_feedback_metrics_csv_flush_interval: int = 100
+
+    # Per-joint torque limits for the external torque term [Nm].
+    # Conservative defaults to keep the leader safe.
+    # [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6, joint_7]
+    force_feedback_torque_limits: list[float] = field(
+        default_factory=lambda: [1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5]
+    )
+
+    # Gripper force feedback scaling and saturation.
+    # The gripper feedback path uses measured follower gripper torque directly.
+    force_feedback_gripper_gain: float = 0.18
+    force_feedback_gripper_torque_limit: float = 0.18
+    # Ignore tiny gripper torques to avoid constant sticky feel.
+    force_feedback_gripper_deadband_nm: float = 0.03
+    # Simple gripper friction model used to extract contact torque from measured torque.
+    force_feedback_gripper_friction_viscous: float = 0.01
+    force_feedback_gripper_friction_coulomb: float = 0.06
+    # LPF for extracted gripper contact torque.
+    force_feedback_gripper_lpf_cutoff_hz: float = 8.0
+    # Gate gripper haptics using leader/follower gripper position mismatch.
+    # This suppresses resistance during free motion and emphasizes blocked grasp contact.
+    force_feedback_gripper_pos_error_deadband_deg: float = 2.0
+    force_feedback_gripper_pos_error_full_scale_deg: float = 8.0
+    # Dedicated gripper gains (softer than arm joints).
+    force_feedback_gripper_position_kp: float = 1.5
+    force_feedback_gripper_position_kd: float = 0.03
+
+    # MIT control gains for force feedback mode.
+    force_feedback_position_kp: list[float] = field(
+        default_factory=lambda: [50.0, 50.0, 50.0, 50.0, 10.0, 10.0, 10.0, 10.0]
+    )
+    force_feedback_position_kd: list[float] = field(
+        default_factory=lambda: [2.0, 2.0, 2.0, 2.0, 0.2, 0.2, 0.2, 0.2]
+    )
+
+    # === Position Synchronization Settings ===
+
+    # MIT gains applied on the leader while it tracks the follower state.
+    # List of 8 values: [joint_1, ..., joint_7, gripper]
+    position_sync_leader_position_kp: list[float] = field(
+        default_factory=lambda: [50.0, 50.0, 50.0, 50.0, 10.0, 10.0, 10.0, 8.0]
+    )
+    position_sync_leader_position_kd: list[float] = field(
+        default_factory=lambda: [2.0, 2.0, 2.0, 2.0, 0.2, 0.2, 0.2, 0.15]
+    )
+
+    # MIT gains applied on the follower while it tracks the leader state.
+    # List of 8 values: [joint_1, ..., joint_7, gripper]
+    position_sync_follower_position_kp: list[float] = field(
+        default_factory=lambda: [240.0, 240.0, 240.0, 240.0, 24.0, 31.0, 25.0, 25.0]
+    )
+    position_sync_follower_position_kd: list[float] = field(
+        default_factory=lambda: [5.0, 5.0, 3.0, 5.0, 0.3, 0.3, 0.3, 0.3]
+    )
+
+    # Joint-wise friction model used by the position synchronization controller.
+    # tau_fric = Fc * tanh(k * velocity_rad_s) + Fv * velocity_rad_s + Fo
+    position_sync_friction_fc: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    position_sync_friction_fv: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    position_sync_friction_fo: list[float] = field(
+        default_factory=lambda: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    position_sync_friction_k: list[float] = field(
+        default_factory=lambda: [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0]
+    )
+
+    # === Performance Tuning ===
+
+    # Enable debug logging (logger.debug() calls)
+    # Disabling reduces CPU overhead and increases control frequency
+    # Default: False (production mode)
+    enable_debug_logging: bool = False
+
+    # Log performance metrics every N control cycles (0 = disabled)
+    # Useful for profiling without per-cycle logging overhead
+    # Example: 150 means log every ~1 second at 150 Hz
+    performance_log_interval: int = 0
+
 
 @TeleoperatorConfig.register_subclass("openarm_leader")
 @dataclass

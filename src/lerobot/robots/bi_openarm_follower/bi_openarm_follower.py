@@ -146,6 +146,14 @@ class BiOpenArmFollower(Robot):
 
         return obs_dict
 
+    def get_motor_observation(self) -> RobotObservation:
+        obs_dict = {}
+        left_obs = self.left_arm.get_motor_observation()
+        obs_dict.update({f"left_{key}": value for key, value in left_obs.items()})
+        right_obs = self.right_arm.get_motor_observation()
+        obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
+        return obs_dict
+
     def send_action(
         self,
         action: RobotAction,

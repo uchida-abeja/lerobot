@@ -110,6 +110,8 @@ from lerobot.robots import (  # noqa: F401
     so_follower,
     unitree_g1 as unitree_g1_robot,
 )
+from lerobot.robots.bi_openarm_follower import BiOpenArmFollower
+from lerobot.robots.openarm_follower import OpenArmFollower
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
@@ -123,6 +125,13 @@ from lerobot.teleoperators import (  # noqa: F401
     reachy2_teleoperator,
     so_leader,
     unitree_g1,
+)
+from lerobot.teleoperators.bi_openarm_leader import BiOpenArmLeader
+from lerobot.teleoperators.openarm_leader import OpenArmLeader
+from lerobot.teleoperators.openarm_leader.force_observer import create_force_observer
+from lerobot.teleoperators.openarm_leader.position_sync import (
+    OpenArmPositionSyncController,
+    is_position_sync_controller,
 )
 from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop
 from lerobot.utils.constants import ACTION, OBS_STR
@@ -288,6 +297,12 @@ def record_loop(
         raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
 
     teleop_arm = teleop_keyboard = None
+    force_observer = None
+    last_feedback_time = None
+    force_observers: dict[str, object] = {}
+    last_feedback_times: dict[str, float | None] = {}
+    position_sync_controller: OpenArmPositionSyncController | None = None
+    position_sync_controllers: dict[str, OpenArmPositionSyncController] = {}
     if isinstance(teleop, list):
         teleop_keyboard = next((t for t in teleop if isinstance(t, KeyboardTeleop)), None)
         teleop_arm = next(
@@ -312,6 +327,94 @@ def record_loop(
                 "For multi-teleop, the list must contain exactly one KeyboardTeleop and one arm teleoperator. Currently only supported for LeKiwi robot."
             )
 
+    if (
+        isinstance(teleop, OpenArmLeader)
+        and isinstance(robot, OpenArmFollower)
+        and is_position_sync_controller(teleop.config)
+    ):
+        position_sync_controller = OpenArmPositionSyncController(
+            urdf_path=teleop.config.urdf_path,
+            gravity_vector=teleop.config.gravity_vector,
+            gravity_gain=teleop.config.gravity_compensation_gain,
+            software_torque_limits=teleop.config.software_torque_limits,
+            leader_position_kp=teleop.config.position_sync_leader_position_kp,
+            leader_position_kd=teleop.config.position_sync_leader_position_kd,
+            follower_position_kp=teleop.config.position_sync_follower_position_kp,
+            follower_position_kd=teleop.config.position_sync_follower_position_kd,
+            friction_fc=teleop.config.position_sync_friction_fc,
+            friction_fv=teleop.config.position_sync_friction_fv,
+            friction_fo=teleop.config.position_sync_friction_fo,
+            friction_k=teleop.config.position_sync_friction_k,
+        )
+    elif (
+        isinstance(teleop, BiOpenArmLeader)
+        and isinstance(robot, BiOpenArmFollower)
+        and is_position_sync_controller(teleop.config)
+    ):
+        for side in ("left", "right"):
+            position_sync_controllers[side] = OpenArmPositionSyncController(
+                urdf_path=teleop.config.urdf_path,
+                gravity_vector=teleop.config.gravity_vector,
+                gravity_gain=teleop.config.gravity_compensation_gain,
+                software_torque_limits=teleop.config.software_torque_limits,
+                leader_position_kp=teleop.config.position_sync_leader_position_kp,
+                leader_position_kd=teleop.config.position_sync_leader_position_kd,
+                follower_position_kp=teleop.config.position_sync_follower_position_kp,
+                follower_position_kd=teleop.config.position_sync_follower_position_kd,
+                friction_fc=teleop.config.position_sync_friction_fc,
+                friction_fv=teleop.config.position_sync_friction_fv,
+                friction_fo=teleop.config.position_sync_friction_fo,
+                friction_k=teleop.config.position_sync_friction_k,
+            )
+    elif (
+        isinstance(teleop, OpenArmLeader)
+        and isinstance(robot, OpenArmFollower)
+        and getattr(teleop.config, "force_feedback_enabled", False)
+    ):
+        try:
+            force_observer = create_force_observer(
+                observer_type=getattr(teleop.config, "force_feedback_observer_type", "simple"),
+                urdf_path=teleop.config.urdf_path,
+                gravity_vector=teleop.config.gravity_vector,
+                gravity_gain=teleop.config.gravity_compensation_gain,
+                lpf_cutoff_hz=teleop.config.force_feedback_lpf_cutoff_hz,
+                torque_limits=teleop.config.force_feedback_torque_limits,
+                dob_lpf_cutoff_hz=getattr(teleop.config, "force_feedback_dob_lpf_cutoff_hz", 20.0),
+                friction_viscous=getattr(teleop.config, "force_feedback_friction_viscous", [0.0] * 7),
+                friction_coulomb=getattr(teleop.config, "force_feedback_friction_coulomb", [0.0] * 7),
+                velocity_lpf_cutoff_hz=getattr(teleop.config, "force_feedback_velocity_lpf_cutoff_hz", 30.0),
+                divergence_threshold_nm=getattr(teleop.config, "force_feedback_divergence_threshold_nm", 3.0),
+            )
+        except Exception as exc:
+            logging.warning(f"Force feedback disabled: failed to init observer ({exc})")
+            force_observer = None
+    elif (
+        isinstance(teleop, BiOpenArmLeader)
+        and isinstance(robot, BiOpenArmFollower)
+        and getattr(teleop.config, "force_feedback_enabled", False)
+    ):
+        for side in ("left", "right"):
+            try:
+                force_observers[side] = create_force_observer(
+                    observer_type=getattr(teleop.config, "force_feedback_observer_type", "simple"),
+                    urdf_path=teleop.config.urdf_path,
+                    gravity_vector=teleop.config.gravity_vector,
+                    gravity_gain=teleop.config.gravity_compensation_gain,
+                    lpf_cutoff_hz=teleop.config.force_feedback_lpf_cutoff_hz,
+                    torque_limits=teleop.config.force_feedback_torque_limits,
+                    dob_lpf_cutoff_hz=getattr(teleop.config, "force_feedback_dob_lpf_cutoff_hz", 20.0),
+                    friction_viscous=getattr(teleop.config, "force_feedback_friction_viscous", [0.0] * 7),
+                    friction_coulomb=getattr(teleop.config, "force_feedback_friction_coulomb", [0.0] * 7),
+                    velocity_lpf_cutoff_hz=getattr(teleop.config, "force_feedback_velocity_lpf_cutoff_hz", 30.0),
+                    divergence_threshold_nm=getattr(teleop.config, "force_feedback_divergence_threshold_nm", 3.0),
+                )
+                last_feedback_times[side] = None
+            except Exception as exc:
+                logging.warning(
+                    "Force feedback disabled: failed to init observer for "
+                    f"{side} arm ({exc})"
+                )
+
     # Reset policy and processor if they are provided
     if policy is not None and preprocessor is not None and postprocessor is not None:
         policy.reset()
@@ -322,6 +425,7 @@ def record_loop(
     start_episode_t = time.perf_counter()
     while timestamp < control_time_s:
         start_loop_t = time.perf_counter()
+        act: RobotAction = {}
 
         if events["exit_early"]:
             events["exit_early"] = False
@@ -380,11 +484,80 @@ def record_loop(
             action_values = act_processed_teleop
             robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
 
+        position_sync_raw_action = act
+        if not position_sync_raw_action and isinstance(teleop, (OpenArmLeader, BiOpenArmLeader)):
+            position_sync_raw_action = teleop.get_action()
+
         # Send action to robot
         # Action can eventually be clipped using `max_relative_target`,
         # so action actually sent is saved in the dataset. action = postprocessor.process(action)
         # TODO(steven, pepijn, adil): we should use a pipeline step to clip the action, so the sent action is the action that we input to the robot.
-        _sent_action = robot.send_action(robot_action_to_send)
+        if position_sync_controller is not None and isinstance(teleop, OpenArmLeader):
+            leader_commands, follower_commands, _ = position_sync_controller.compute_commands(
+                leader_state=position_sync_raw_action,
+                follower_state=obs,
+                follower_goal_action=robot_action_to_send,
+            )
+            teleop.send_mit_commands(leader_commands)
+            robot.send_mit_commands(follower_commands)
+        elif position_sync_controllers and isinstance(teleop, BiOpenArmLeader):
+            for side, controller in position_sync_controllers.items():
+                side_action = {
+                    key.removeprefix(f"{side}_"): value
+                    for key, value in position_sync_raw_action.items()
+                    if key.startswith(f"{side}_")
+                }
+                side_obs = {
+                    key.removeprefix(f"{side}_"): value
+                    for key, value in obs.items()
+                    if key.startswith(f"{side}_")
+                }
+                side_goal_action = {
+                    key.removeprefix(f"{side}_"): value
+                    for key, value in robot_action_to_send.items()
+                    if key.startswith(f"{side}_")
+                }
+                leader_commands, follower_commands, _ = controller.compute_commands(
+                    leader_state=side_action,
+                    follower_state=side_obs,
+                    follower_goal_action=side_goal_action,
+                )
+                getattr(teleop, f"{side}_arm").send_mit_commands(leader_commands)
+                getattr(robot, f"{side}_arm").send_mit_commands(follower_commands)
+        else:
+            _sent_action = robot.send_action(robot_action_to_send)
+
+        if force_observer is not None and isinstance(teleop, OpenArmLeader):
+            now = time.perf_counter()
+            dt_s = None if last_feedback_time is None else now - last_feedback_time
+            last_feedback_time = now
+
+            tau_ext = force_observer.estimate(obs, dt_s=dt_s)
+            feedback = {f"joint_{i}.tau_ext": float(tau_ext[i - 1]) for i in range(1, 8)}
+            teleop.send_feedback(feedback)
+        elif force_observers and isinstance(teleop, BiOpenArmLeader):
+            now = time.perf_counter()
+            feedback: dict[str, float] = {}
+            for side, observer in force_observers.items():
+                side_obs = {
+                    key.removeprefix(f"{side}_"): value
+                    for key, value in obs.items()
+                    if key.startswith(f"{side}_")
+                }
+                dt_s = None
+                if side in last_feedback_times and last_feedback_times[side] is not None:
+                    dt_s = now - last_feedback_times[side]
+                last_feedback_times[side] = now
+
+                tau_ext = observer.estimate(side_obs, dt_s=dt_s)
+                feedback.update(
+                    {
+                        f"{side}_joint_{i}.tau_ext": float(tau_ext[i - 1])
+                        for i in range(1, 8)
+                    }
+                )
+            if feedback:
+                teleop.send_feedback(feedback)
 
         # Write to dataset
         if dataset is not None:

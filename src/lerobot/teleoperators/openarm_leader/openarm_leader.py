@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import logging
+import math
 import os
 from pathlib import Path
 import time
@@ -29,6 +30,7 @@ from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnected
 
 from ..teleoperator import Teleoperator
 from .config_openarm_leader import OpenArmLeaderConfig
+from .position_sync import is_position_sync_controller
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +49,16 @@ class OpenArmLeader(Teleoperator):
     def __init__(self, config: OpenArmLeaderConfig):
         super().__init__(config)
         self.config = config
+        self._last_states: dict[str, dict[str, float]] | None = None
+        # Cache once; the controller type never changes after init.
+        self._is_position_sync: bool = is_position_sync_controller(config)
+
+        # Performance monitoring
+        self._cycle_count = 0
+        self._cycle_times: list[float] = []
+        self._max_cycle_times = 100  # Keep rolling average of last 100 cycles
+        self._gripper_contact_lpf_state = 0.0
+        self._last_gripper_feedback_time: float | None = None
 
         # Arm motors
         motors: dict[str, Motor] = {}
@@ -70,7 +82,7 @@ class OpenArmLeader(Teleoperator):
 
         # Initialize gravity compensation
         self.arm_ik = None
-        if self.config.gravity_compensation:
+        if self.config.gravity_compensation or self.config.force_feedback_enabled:
             from .openarm_kinematic_processor import OpenArmIK
 
             # Expand environment variables in URDF path and convert to Path
@@ -82,12 +94,17 @@ class OpenArmLeader(Teleoperator):
                     gravity_vector=np.array(self.config.gravity_vector),
                     num_arm_joints=7,
                 )
-                logger.info(
-                    f"Gravity compensation enabled with gain={self.config.gravity_compensation_gain}"
-                )
-                if not self.config.manual_control:
+                if self.config.gravity_compensation:
+                    logger.info(
+                        f"Gravity compensation enabled with gain={self.config.gravity_compensation_gain}"
+                    )
+                else:
+                    logger.info(
+                        f"Dynamics model initialized for force feedback (gravity compensation disabled)"
+                    )
+                if self.config.manual_control:
                     logger.warning(
-                        "Gravity compensation requires manual_control=False. "
+                        "Torque control requires manual_control=False for gravity compensation or force feedback. "
                         "Please set manual_control=False in config."
                     )
             except Exception as e:
@@ -107,8 +124,12 @@ class OpenArmLeader(Teleoperator):
 
     @property
     def feedback_features(self) -> dict[str, type]:
-        """Feedback features (not implemented for OpenArms)."""
-        return {}
+        """Feedback features for force feedback (external torque per joint)."""
+        features = {f"joint_{i}.tau_ext": float for i in range(1, 8)}
+        features["gripper.tau_ext"] = float
+        features["gripper.vel"] = float
+        features["gripper.pos"] = float
+        return features
 
     @property
     def is_connected(self) -> bool:
@@ -209,17 +230,30 @@ class OpenArmLeader(Teleoperator):
         - manual_control=True: Disable torque for manual movement
         - Otherwise: Enable MIT control with configured gains
         """
+        if self.config.manual_control:
+            if self.config.force_feedback_enabled:
+                logger.warning(
+                    "Force feedback requested while manual_control=True; torque will remain disabled."
+                )
+            logger.info("Configuring motors for manual control (torque disabled)")
+            return self.bus.disable_torque()
+
+        if self._is_position_sync:
+            logger.info("Configuring motors for bilateral position synchronization mode")
+            return self.bus.configure_motors()
+
+        if self.config.force_feedback_enabled and self.arm_ik is not None:
+            logger.info("Configuring motors for force feedback mode (soft control)")
+            return self.bus.configure_motors()
+
         if self.config.gravity_compensation and self.arm_ik is not None:
             logger.info("Configuring motors for gravity compensation mode (soft control)")
             # When gravity compensation is enabled, we'll use soft MIT control
             # The actual gains will be applied in _apply_gravity_compensation()
             return self.bus.configure_motors()
-        elif self.config.manual_control:
-            logger.info("Configuring motors for manual control (torque disabled)")
-            return self.bus.disable_torque()
-        else:
-            logger.info("Configuring motors for MIT control")
-            return self.bus.configure_motors()
+
+        logger.info("Configuring motors for MIT control")
+        return self.bus.configure_motors()
 
     def setup_motors(self) -> None:
         raise NotImplementedError(
@@ -238,14 +272,17 @@ class OpenArmLeader(Teleoperator):
 
         Reads all motor states (pos/vel/torque) in one CAN refresh cycle.
         """
-        start = time.perf_counter()
+        collect_perf_metrics = bool(
+            self.config.enable_debug_logging and self.config.performance_log_interval > 0
+        )
+        start = time.perf_counter() if collect_perf_metrics else None
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
         action_dict: dict[str, Any] = {}
 
         # Use sync_read_all_states to get pos/vel/torque in one go
-        states = self.bus.sync_read_all_states()
+        states = self.read_motor_states()
 
         # Extract arm joint positions for gravity compensation (exclude gripper)
         arm_positions = []
@@ -268,20 +305,26 @@ class OpenArmLeader(Teleoperator):
         action_dict["gripper.torque"] = gripper_state.get("torque")
 
         # Apply gravity compensation if enabled
-        if self.config.gravity_compensation and self.arm_ik is not None:
+        if (
+            self.config.gravity_compensation
+            and self.arm_ik is not None
+            and not self._is_position_sync
+        ):
             if len(arm_positions) == 7:
                 try:
                     q = np.array(arm_positions)
 
                     # Compute gravity compensation torques using RNEA
                     gravity_torques_raw = self.arm_ik.solve_tau(q)
-                    logger.debug(f"Raw gravity torques [Nm]: {gravity_torques_raw}")
+                    if self.config.enable_debug_logging:
+                        logger.debug(f"Raw gravity torques [Nm]: {gravity_torques_raw}")
 
                     # Apply gain adjustment for individual robot calibration
                     gravity_torques = gravity_torques_raw * self.config.gravity_compensation_gain
-                    logger.debug(
-                        f"After gain ({self.config.gravity_compensation_gain}): {gravity_torques}"
-                    )
+                    if self.config.enable_debug_logging:
+                        logger.debug(
+                            f"After gain ({self.config.gravity_compensation_gain}): {gravity_torques}"
+                        )
 
                     # Apply software torque limits (safety)
                     torques_limited = []
@@ -292,14 +335,16 @@ class OpenArmLeader(Teleoperator):
                         if abs(original) > limit:
                             torques_limited.append((i + 1, original, gravity_torques[i]))
                     
-                    if torques_limited:
-                        logger.warning(
-                            f"Torque limits applied: "
-                            + ", ".join([f"joint_{j}: {o:.3f} -> {c:.3f} Nm" 
-                                        for j, o, c in torques_limited])
+                    if torques_limited and self.config.enable_debug_logging:
+                        logger.debug(
+                            "Torque limits applied: %s",
+                            ", ".join(
+                                [f"joint_{j}: {o:.3f} -> {c:.3f} Nm" for j, o, c in torques_limited]
+                            ),
                         )
                     
-                    logger.debug(f"Final torques [Nm]: {gravity_torques}")
+                    if self.config.enable_debug_logging:
+                        logger.debug(f"Final torques [Nm]: {gravity_torques}")
 
                     # Send gravity compensation torques via MIT control
                     self._apply_gravity_compensation(gravity_torques, states)
@@ -312,10 +357,36 @@ class OpenArmLeader(Teleoperator):
                     "Skipping gravity compensation."
                 )
 
-        dt_ms = (time.perf_counter() - start) * 1e3
-        logger.debug(f"{self} read state + gravity comp: {dt_ms:.1f}ms")
+        # Performance monitoring
+        if collect_perf_metrics and start is not None:
+            dt_ms = (time.perf_counter() - start) * 1e3
+            self._cycle_times.append(dt_ms)
+            if len(self._cycle_times) > self._max_cycle_times:
+                self._cycle_times.pop(0)
+            self._cycle_count += 1
+
+            if self._cycle_count % self.config.performance_log_interval == 0:
+                avg_time = sum(self._cycle_times) / len(self._cycle_times)
+                max_time = max(self._cycle_times)
+                freq = 1000.0 / avg_time if avg_time > 0 else 0
+                logger.debug(
+                    f"{self} | Loop time: avg={avg_time:.2f}ms, max={max_time:.2f}ms ({freq:.0f} Hz)"
+                )
 
         return action_dict
+
+    def read_motor_states(self) -> dict[str, dict[str, float]]:
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        states = self.bus.sync_read_all_states()
+        self._last_states = states
+        return states
+
+    def send_mit_commands(self, commands: dict[str, tuple[float, float, float, float, float]]) -> None:
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+        self.bus._mit_control_batch(commands)
 
     def _apply_gravity_compensation(
         self, gravity_torques: np.ndarray, current_states: dict
@@ -358,7 +429,149 @@ class OpenArmLeader(Teleoperator):
             logger.error(f"Failed to send gravity compensation commands: {e}")
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
-        raise NotImplementedError("Feedback is not yet implemented for OpenArm leader.")
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        if not self.config.force_feedback_enabled:
+            return
+
+        if self.config.manual_control:
+            logger.warning(
+                "Force feedback requires manual_control=False. "
+                "Feedback command skipped."
+            )
+            return
+
+        if self.arm_ik is None:
+            logger.warning("Force feedback disabled: OpenArmIK not available.")
+            return
+
+        states = self._last_states or self.bus.sync_read_all_states()
+
+        arm_positions = []
+        for i in range(1, 8):
+            motor_name = f"joint_{i}"
+            state = states.get(motor_name, {})
+            position_deg = state.get("position", 0.0)
+            arm_positions.append(np.deg2rad(position_deg))
+
+        if len(arm_positions) != 7:
+            logger.warning("Force feedback skipped: invalid joint position count.")
+            return
+
+        tau_ext = np.array(
+            [feedback.get(f"joint_{i}.tau_ext", 0.0) for i in range(1, 8)],
+            dtype=float,
+        )
+        gripper_tau_meas = float(feedback.get("gripper.tau_ext", 0.0))
+        gripper_vel_meas = float(feedback.get("gripper.vel", 0.0))
+        follower_gripper_pos_deg = float(feedback.get("gripper.pos", 0.0))
+
+        # Extract contact-like torque by subtracting a simple gripper friction model.
+        gripper_deadband = max(0.0, float(self.config.force_feedback_gripper_deadband_nm))
+        gripper_friction = (
+            float(self.config.force_feedback_gripper_friction_coulomb)
+            + float(self.config.force_feedback_gripper_friction_viscous) * abs(gripper_vel_meas)
+        )
+        gripper_contact_mag = max(0.0, abs(gripper_tau_meas) - gripper_friction - gripper_deadband)
+        gripper_tau_ext = float(np.sign(gripper_tau_meas) * gripper_contact_mag)
+
+        now = time.perf_counter()
+        dt_s = None if self._last_gripper_feedback_time is None else now - self._last_gripper_feedback_time
+        self._last_gripper_feedback_time = now
+        if dt_s is None or dt_s <= 0.0 or self.config.force_feedback_gripper_lpf_cutoff_hz <= 0.0:
+            gripper_alpha = 1.0
+        else:
+            gripper_alpha = 1.0 - math.exp(
+                -2.0 * math.pi * self.config.force_feedback_gripper_lpf_cutoff_hz * dt_s
+            )
+        self._gripper_contact_lpf_state = self._gripper_contact_lpf_state + gripper_alpha * (
+            gripper_tau_ext - self._gripper_contact_lpf_state
+        )
+        gripper_tau_ext = float(self._gripper_contact_lpf_state)
+
+        if len(self.config.force_feedback_torque_limits) == 7:
+            tau_ext = np.clip(
+                tau_ext,
+                -np.array(self.config.force_feedback_torque_limits),
+                np.array(self.config.force_feedback_torque_limits),
+            )
+        gripper_tau_ext = float(
+            np.clip(
+                gripper_tau_ext,
+                -self.config.force_feedback_gripper_torque_limit,
+                self.config.force_feedback_gripper_torque_limit,
+            )
+        )
+
+        gravity_torques_raw = self.arm_ik.solve_tau(np.array(arm_positions))
+        gravity_torques = gravity_torques_raw * self.config.gravity_compensation_gain
+
+        torque_cmd = gravity_torques + self.config.force_feedback_gain * tau_ext
+
+        if len(self.config.software_torque_limits) == 7:
+            torque_cmd = np.clip(
+                torque_cmd,
+                -np.array(self.config.software_torque_limits),
+                np.array(self.config.software_torque_limits),
+            )
+
+        commands = {}
+        for i in range(7):
+            motor_name = f"joint_{i+1}"
+            state = states.get(motor_name, {})
+            target_pos_deg = state.get("position", 0.0)
+
+            kp = self.config.force_feedback_position_kp[i]
+            kd = self.config.force_feedback_position_kd[i]
+
+            commands[motor_name] = (
+                kp,
+                kd,
+                target_pos_deg,
+                0.0,
+                torque_cmd[i],
+            )
+
+        # Apply direct gripper haptic feedback from follower measured gripper torque.
+        gripper_state = states.get("gripper", {})
+        gripper_target_pos_deg = gripper_state.get("position", 0.0)
+        gripper_pos_error = abs(gripper_target_pos_deg - follower_gripper_pos_deg)
+        pos_error_deadband = max(0.0, float(self.config.force_feedback_gripper_pos_error_deadband_deg))
+        pos_error_full_scale = max(
+            pos_error_deadband + 1e-6,
+            float(self.config.force_feedback_gripper_pos_error_full_scale_deg),
+        )
+        gripper_contact_gate = float(
+            np.clip(
+                (gripper_pos_error - pos_error_deadband)
+                / (pos_error_full_scale - pos_error_deadband),
+                0.0,
+                1.0,
+            )
+        )
+        gripper_kp = self.config.force_feedback_gripper_position_kp
+        gripper_kd = self.config.force_feedback_gripper_position_kd
+        gripper_torque_cmd = self.config.force_feedback_gripper_gain * gripper_contact_gate * gripper_tau_ext
+        gripper_torque_cmd = float(
+            np.clip(
+                gripper_torque_cmd,
+                -self.config.force_feedback_gripper_torque_limit,
+                self.config.force_feedback_gripper_torque_limit,
+            )
+        )
+        commands["gripper"] = (
+            gripper_kp,
+            gripper_kd,
+            gripper_target_pos_deg,
+            0.0,
+            gripper_torque_cmd,
+        )
+
+        try:
+            self.bus._mit_control_batch(commands)
+        except Exception as e:
+            logger.error(f"Failed to send force feedback commands: {e}")
 
     def disconnect(self) -> None:
         """Disconnect from teleoperator."""

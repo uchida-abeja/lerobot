@@ -226,32 +226,57 @@ class OpenArmFollower(Robot):
         Reads all motor states (pos/vel/torque) in one CAN refresh cycle
         instead of 3 separate reads.
         """
-        start = time.perf_counter()
+        collect_debug_timing = logger.isEnabledFor(logging.DEBUG)
+        start = time.perf_counter() if collect_debug_timing else None
 
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
+        states = self.read_motor_states()
+        obs_dict = self._motor_states_to_observation(states)
+
+        # Capture images from cameras
+        for cam_key, cam in self.cameras.items():
+            cam_start = time.perf_counter() if collect_debug_timing else None
+            obs_dict[cam_key] = cam.async_read()
+            if collect_debug_timing and cam_start is not None:
+                dt_ms = (time.perf_counter() - cam_start) * 1e3
+                logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
+
+        if collect_debug_timing and start is not None:
+            dt_ms = (time.perf_counter() - start) * 1e3
+            logger.debug(f"{self} get_observation took: {dt_ms:.1f}ms")
+
+        return obs_dict
+
+    def _motor_states_to_observation(self, states: dict[str, dict[str, float]]) -> RobotObservation:
         obs_dict: dict[str, Any] = {}
-
-        states = self.bus.sync_read_all_states()
-
         for motor in self.bus.motors:
             state = states.get(motor, {})
             obs_dict[f"{motor}.pos"] = state.get("position", 0.0)
             obs_dict[f"{motor}.vel"] = state.get("velocity", 0.0)
             obs_dict[f"{motor}.torque"] = state.get("torque", 0.0)
-
-        # Capture images from cameras
-        for cam_key, cam in self.cameras.items():
-            start = time.perf_counter()
-            obs_dict[cam_key] = cam.async_read()
-            dt_ms = (time.perf_counter() - start) * 1e3
-            logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
-
-        dt_ms = (time.perf_counter() - start) * 1e3
-        logger.debug(f"{self} get_observation took: {dt_ms:.1f}ms")
-
         return obs_dict
+
+    def read_motor_states(self) -> dict[str, dict[str, float]]:
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+        return self.bus.sync_read_all_states()
+
+    def get_motor_observation(self) -> RobotObservation:
+        return self._motor_states_to_observation(self.read_motor_states())
+
+    def send_mit_commands(self, commands: dict[str, tuple[float, float, float, float, float]]) -> None:
+        if not self.is_connected:
+            raise DeviceNotConnectedError(f"{self} is not connected.")
+        # Apply the same joint limit clipping as send_action to prevent unsafe positions.
+        clipped: dict[str, tuple[float, float, float, float, float]] = {}
+        for motor_name, (kp, kd, pos, vel, tau_ff) in commands.items():
+            if motor_name in self.config.joint_limits:
+                min_lim, max_lim = self.config.joint_limits[motor_name]
+                pos = float(max(min_lim, min(max_lim, pos)))
+            clipped[motor_name] = (kp, kd, pos, vel, tau_ff)
+        self.bus._mit_control_batch(clipped)
 
     def send_action(
         self,
